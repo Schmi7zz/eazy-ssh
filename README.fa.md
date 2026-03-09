@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="EazySSH" width="100%" />
 
-<br /><br /> 
+<br /><br />
 
 **از طریق تلگرام به سرورهات SSH بزن.**
 
@@ -49,7 +49,7 @@
 نیاز دارید: یه VPS با Docker، یه دامنه، و یه بات تلگرام.
 
 ```bash
-git clone https://github.com/Schmi7zz/eazy-ssh.git
+git clone https://github.com/YOUR_USERNAME/eazy-ssh.git
 cd eazy-ssh
 cp .env.example .env
 nano .env  # توکن بات رو وارد کن

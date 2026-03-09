@@ -84,6 +84,20 @@ Eazy SSH is a **Telegram Mini App** that gives you a full Linux terminal right i
 
 ---
 
+### ⚡ One-Line Install
+
+After setting up DNS records, SSH into your server and run:
+
+```bash
+git clone https://github.com/YOUR_USERNAME/eazy-ssh.git /opt/ssh-terminal
+cd /opt/ssh-terminal
+bash install.sh
+```
+
+The interactive installer will guide you through everything. Or follow the manual steps below.
+
+---
+
 ### Step 1 — DNS Setup
 
 Create two A records pointing to your server IP:
@@ -102,7 +116,7 @@ Create two A records pointing to your server IP:
 ```bash
 ssh root@YOUR_SERVER_IP
 
-git clone https://github.com/Schmi7zz/eazy-ssh.git /opt/ssh-terminal
+git clone https://github.com/YOUR_USERNAME/eazy-ssh.git /opt/ssh-terminal
 cd /opt/ssh-terminal
 ```
 
