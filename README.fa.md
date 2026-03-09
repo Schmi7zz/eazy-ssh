@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="EazySSH" width="100%" />
 
-<br /><br />
+<br /><br /> 
 
 **از طریق تلگرام به سرورهات SSH بزن.**
 
