@@ -13,7 +13,7 @@
 [![Go](https://img.shields.io/badge/backend-Go-00ADD8.svg)](backend/)
 [![Telegram](https://img.shields.io/badge/platform-Telegram-26A5E4.svg)](https://telegram.org)
 
-[امکانات](#-امکانات) · [شروع سریع](#-شروع-سریع) · [آموزش کامل](#-آموزش-کامل-نصب) · [کانال تلگرام](https://t.me/SchmitzWS)
+[امکانات](#-امکانات) · [نصب](#-نصب) · [نصب دستی](#-نصب-دستی) · [کانال تلگرام](https://t.me/SchmitzWS)
 
 **[🇬🇧 English](README.md)**
 
@@ -23,13 +23,13 @@
 
 ## ✨ امکانات
 
-- 🖥 **ترمینال واقعی** — ترمینال کامل xterm.js با رنگ، اسکرول و ریسایز خودکار
+- 🖥 **ترمینال واقعی** — xterm.js کامل با رنگ، اسکرول و ریسایز خودکار
 - 🔐 **احراز هویت دوگانه** — اتصال با پسورد یا کلید SSH (با پشتیبانی passphrase)
-- 📱 **موبایل فرست** — نوار کنترل لمسی با Ctrl، Tab، Esc، فلش‌ها، کپی/پیست
+- 📱 **موبایل فرست** — نوار کنترل لمسی: Ctrl+C/D/Z/L، Tab، Esc، فلش‌ها، کپی/پیست
 - 💾 **ذخیره سرورها** — لیست سرورها بعد از بستن اپ هم باقی می‌مونه
-- 🛡 **فقط تلگرام** — اعتبارسنجی `initData` تلگرام با HMAC-SHA256 — بدون دسترسی از بیرون
-- 🎨 **ظاهر بومی** — تم تلگرام (تاریک/روشن) رو خودکار اعمال می‌کنه
-- ⚡ **سریع** — بکند Go با WebSocket، بدون تاخیر محسوس
+- 🛡 **فقط تلگرام** — اعتبارسنجی HMAC-SHA256 initData — بدون دسترسی از بیرون
+- 🎨 **ظاهر بومی** — تم تلگرام (تاریک/روشن) خودکار اعمال میشه
+- ⚡ **سریع** — بکند Go با WebSocket، بدون تأخیر محسوس
 
 ## 🏗 معماری
 
@@ -37,165 +37,153 @@
 ┌──────────────────┐     WebSocket (wss://)     ┌──────────────────┐     SSH (tcp/22)     ┌──────────────┐
 │  تلگرام          │ ◄──────────────────────►   │  بکند Go         │ ◄──────────────────► │  سرور شما    │
 │  (مینی‌اپ)        │     رمزنگاری + اعتبارسنجی  │  (WebSocket→SSH) │     SSH استاندارد    │  (هرجایی)     │
-│                  │                             │                  │                      │              │
-│  xterm.js        │                             │  بررسی initData  │                      │  Linux/BSD   │
-│  React UI        │                             │  تخصیص PTY       │                      │  هر سیستمی   │
-│  نوار کنترل      │                             │  انتقال استریم    │                      │              │
 └──────────────────┘                             └──────────────────┘                      └──────────────┘
 ```
 
-## 🚀 شروع سریع
+## 📋 پیش‌نیازها
 
-نیاز دارید: یه VPS با Docker، یه دامنه، و یه بات تلگرام.
+- یه **VPS** با اوبونتو ۲۲+ و IP عمومی
+- یه **دامنه** (تلگرام HTTPS میخواد)
+- **توکن بات تلگرام** از [@BotFather](https://t.me/BotFather)
 
-```bash
-git clone https://github.com/YOUR_USERNAME/eazy-ssh.git
-cd eazy-ssh
-cp .env.example .env
-nano .env  # توکن بات رو وارد کن
-docker compose up -d --build
-```
+Docker خودکار نصب میشه اگه نداشته باشید.
 
-## 📖 آموزش کامل نصب
-
-### پیش‌نیازها
-
-| چی | چرا |
-|-----|------|
-| VPS (اوبونتو ۲۲+) | هاست بکند و فرانت |
-| Docker و Docker Compose | اجرای بکند Go |
-| دامنه | برای HTTPS لازمه (تلگرام بدون SSL کار نمیکنه) |
-| بات تلگرام | از [@BotFather](https://t.me/BotFather) بسازید |
+## 🚀 نصب
 
 ### مرحله ۱ — رکورد DNS بساز
 
-برو توی پنل DNS دامنت و دو رکورد A بساز که به IP سرورت اشاره کنن:
+دو رکورد A بساز که به IP سرورت اشاره کنن:
 
 ```
 ssh-terminal.yourdomain.com  →  IP_سرور
 ssh-api.yourdomain.com       →  IP_سرور
 ```
 
-> اگه کلادفلر داری، فعلاً پروکسی رو خاموش کن (ابر خاکستری) تا SSL بگیری.
+> اگه کلادفلر داری، فعلاً پروکسی رو خاموش کن (ابر خاکستری).
 
-### مرحله ۲ — SSH بزن به سرورت
+### مرحله ۲ — اسکریپت نصب رو اجرا کن
+
+SSH بزن به سرورت و اجرا کن:
 
 ```bash
-ssh root@IP_سرور
+git clone https://github.com/Schmi7zz/eazy-ssh.git /opt/ssh-terminal
+cd /opt/ssh-terminal
+bash install.sh
 ```
 
-### مرحله ۳ — نصب وابستگی‌ها
+اسکریپت این موارد رو ازت میپرسه:
 
+| سوال | مثال | از کجا بگیرم |
+|------|-------|-------------|
+| ساب‌دامنه فرانت | `ssh-terminal.example.com` | DNS مرحله ۱ |
+| ساب‌دامنه بکند | `ssh-api.example.com` | DNS مرحله ۱ |
+| توکن بات | `123456:ABC-DEF...` | [@BotFather](https://t.me/BotFather) → `/newbot` |
+| آیدی ادمین تلگرام | `123456789` | [@userinfobot](https://t.me/userinfobot) |
+| یوزرنیم بات | `EazySSH_bot` | یوزرنیمی که توی BotFather انتخاب کردی |
+| اسم کوتاه مینی‌اپ | `terminal` | هر اسمی که بخوای (a-z, 0-9, _) |
+| ایمیل | `you@email.com` | برای گواهی SSL |
+
+بعد خودکار انجام میده:
+
+1. نصب Nginx، Certbot، Docker، python-telegram-bot
+2. بیلد و اجرای بکند Go (WebSocket)
+3. تنظیم Nginx ریورس پراکسی
+4. گرفتن گواهی SSL از Let's Encrypt
+5. جایگذاری دامنه‌ها توی همه فایل‌های کانفیگ
+6. راه‌اندازی بات تلگرام به عنوان سرویس systemd
+
+### مرحله ۳ — تنظیم BotFather
+
+بعد از نصب، برو پیش [@BotFather](https://t.me/BotFather):
+
+**دکمه منو رو ست کن:**
+1. `/setmenubutton` → بات رو انتخاب کن
+2. URL: `https://ssh-terminal.yourdomain.com`
+3. عنوان: `Open Terminal`
+
+**مینی‌اپ بساز:**
+1. `/newapp` → بات رو انتخاب کن
+2. عنوان، توضیح، عکس (640×360)
+3. Web App URL: `https://ssh-terminal.yourdomain.com`
+4. Short name: همون اسمی که موقع نصب وارد کردی (مثلاً `terminal`)
+
+### مرحله ۴ — تمام! 🎉
+
+`t.me/YOUR_BOT/terminal` رو توی تلگرام باز کن → سرور اضافه کن → وصل شو!
+
+## 🔧 مدیریت
+
+```bash
+# لاگ بکند
+docker-compose -f /opt/ssh-terminal/docker-compose.yml logs -f
+
+# ریستارت بکند
+docker-compose -f /opt/ssh-terminal/docker-compose.yml restart
+
+# لاگ بات
+journalctl -u ssh-terminal-bot -f
+
+# ویرایش کانفیگ
+nano /opt/ssh-terminal/.env
+
+# آمار کاربران (توی تلگرام)
+/stats
+```
+
+## 📖 نصب دستی
+
+<details>
+<summary>اگه ترجیح میدی دستی نصب کنی به جای <code>install.sh</code>، اینجا کلیک کن.</summary>
+
+<br>
+
+**۱. نصب وابستگی‌ها:**
 ```bash
 apt update && apt install -y nginx certbot python3-certbot-nginx python3-pip git
 pip3 install python-telegram-bot --break-system-packages
 ```
 
-### مرحله ۴ — کلون و تنظیم
-
+**۲. کلون و تنظیم:**
 ```bash
-cd /opt
-git clone https://github.com/YOUR_USERNAME/eazy-ssh.git ssh-terminal
-cd ssh-terminal
+git clone https://github.com/Schmi7zz/eazy-ssh.git /opt/ssh-terminal
+cd /opt/ssh-terminal
 cp .env.example .env
-nano .env
+nano .env   # پر کن: BOT_TOKEN, WEBAPP_URL, ADMIN_ID, USERS_FILE
 ```
 
-فایل `.env` رو پر کن:
-
-```env
-BOT_TOKEN=123456:ABC-DEF...        # از @BotFather
-WEBAPP_URL=https://ssh-terminal.yourdomain.com
-ADMIN_ID=123456789                  # آیدی عددی تلگرامت (از @userinfobot بگیر)
-USERS_FILE=/opt/ssh-terminal/users.json
+**۳. ویرایش فرانت:**
+```bash
+nano frontend/index.html
+# WS_URL رو عوض کن: wss://ssh-api.yourdomain.com/ws
+# لینک تلگرام رو عوض کن: https://t.me/YOUR_BOT/YOUR_APP
 ```
 
-### مرحله ۵ — تنظیم فرانت
-
-فایل `frontend/index.html` رو ادیت کن و دو مقدار رو عوض کن:
-
-```javascript
-// آدرس WebSocket بکندت
-const WS_URL = "wss://ssh-api.yourdomain.com/ws";
-```
-
-```html
-<!-- لینک بات تلگرامت (برای صفحه Access Denied) -->
-<a href="https://t.me/YOUR_BOT/YOUR_APP" ...>
-```
-
-### مرحله ۶ — بکند رو بالا بیار
-
+**۴. بیلد بکند:**
 ```bash
 docker compose up -d --build
+curl http://localhost:8080/health   # باید بنویسه: ok
 ```
 
-تست:
-
-```bash
-curl http://localhost:8080/health
-# باید بنویسه: ok
-```
-
-### مرحله ۷ — تنظیم Nginx
-
+**۵. تنظیم Nginx:**
 ```bash
 cp nginx.conf.example /etc/nginx/sites-available/ssh-terminal
-nano /etc/nginx/sites-available/ssh-terminal
-```
-
-`yourdomain.com` رو با دامنه واقعیت عوض کن، بعد:
-
-```bash
+nano /etc/nginx/sites-available/ssh-terminal   # yourdomain.com رو عوض کن
 ln -s /etc/nginx/sites-available/ssh-terminal /etc/nginx/sites-enabled/
-nginx -t
-systemctl reload nginx
+nginx -t && systemctl reload nginx
 ```
 
-### مرحله ۸ — گواهی SSL بگیر
-
+**۶. گواهی SSL:**
 ```bash
 certbot --nginx -d ssh-terminal.yourdomain.com -d ssh-api.yourdomain.com
 ```
 
-ایمیلت رو وارد کن و شرایط رو قبول کن. Certbot خودکار Nginx رو برای HTTPS تنظیم می‌کنه.
-
-### مرحله ۹ — تست توی مرورگر
-
-آدرس `https://ssh-terminal.yourdomain.com` رو باز کن — باید "Access Denied" نشون بده (درسته! فقط از داخل تلگرام کار می‌کنه).
-
-### مرحله ۱۰ — تنظیم بات تلگرام
-
-برو پیش [@BotFather](https://t.me/BotFather):
-
-1. `/newbot` — بات رو بساز و توکن رو بگیر
-2. `/setmenubutton` — بات رو انتخاب کن → URL: `https://ssh-terminal.yourdomain.com` → عنوان: `Open Terminal`
-3. `/newapp` — بات رو انتخاب کن → عنوان، توضیح، عکس (640×360) → Web App URL: `https://ssh-terminal.yourdomain.com` → اسم کوتاه: `terminal`
-
-### مرحله ۱۱ — بات رو استارت کن
-
+**۷. اجرای بات:**
 ```bash
 cp ssh-terminal-bot.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable ssh-terminal-bot
-systemctl start ssh-terminal-bot
+systemctl daemon-reload && systemctl enable ssh-terminal-bot && systemctl start ssh-terminal-bot
 ```
 
-تست:
-
-```bash
-systemctl status ssh-terminal-bot
-```
-
-### مرحله ۱۲ — تمام! 🎉
-
-بات رو توی تلگرام باز کن → **Open Terminal** رو بزن → سرور اضافه کن → وصل شو!
-
-لینک مینی‌اپت: `https://t.me/YOUR_BOT/terminal`
-
-دستورات ادمین:
-- `/start` — پیام خوش‌آمد با دکمه Open Terminal
-- `/stats` — تعداد و لیست کاربران (فقط ادمین)
+</details>
 
 ## 📁 ساختار پروژه
 
@@ -203,35 +191,34 @@ systemctl status ssh-terminal-bot
 eazy-ssh/
 ├── backend/
 │   ├── main.go              # پراکسی Go: WebSocket→SSH با احراز هویت تلگرام
-│   ├── go.mod               # وابستگی‌های Go
-│   └── Dockerfile           # بیلد Docker چند مرحله‌ای
+│   ├── go.mod
+│   └── Dockerfile
 ├── frontend/
 │   └── index.html           # مینی‌اپ React (تک فایل، CDN)
 ├── bot.py                   # بات تلگرام (/start, /stats)
-├── docker-compose.yml       # تنظیم کانتینر بکند
-├── nginx.conf.example       # قالب Nginx ریورس پراکسی
-├── ssh-terminal-bot.service # سرویس systemd برای بات
-├── .env.example             # قالب متغیرهای محیطی
-├── LICENSE                  # MIT
-├── README.md                # مستندات انگلیسی
-└── README.fa.md             # مستندات فارسی (همین فایل)
+├── install.sh               # اسکریپت نصب تعاملی
+├── docker-compose.yml
+├── nginx.conf.example
+├── ssh-terminal-bot.service
+├── .env.example
+├── LICENSE
+├── README.md
+└── README.fa.md
 ```
 
 ## 🔒 امنیت
 
-- **اعتبارسنجی تلگرام** — هر اتصال WebSocket با HMAC-SHA256 و توکن بات اعتبارسنجی میشه. بدون نشست معتبر تلگرام = بدون دسترسی.
-- **بدون ذخیره اطلاعات سمت سرور** — اطلاعات SSH هر بار ارسال میشن و هرگز روی بکند ذخیره نمیشن.
-- **ذخیره‌سازی سمت کلاینت** — لیست سرورها توی localStorage مرورگر (داخل وبویو تلگرام) ذخیره میشه. پسوردها فقط روی دستگاه کاربر هستن.
+- **اعتبارسنجی تلگرام** — هر اتصال WebSocket با HMAC-SHA256 اعتبارسنجی میشه. بدون نشست معتبر تلگرام = بدون دسترسی.
+- **بدون ذخیره سمت سرور** — اطلاعات SSH هر بار ارسال میشن و هرگز روی بکند ذخیره نمیشن.
+- **فقط سمت کلاینت** — لیست سرورها توی localStorage وبویو تلگرام ذخیره میشه.
 - **HTTPS همه‌جا** — تمام ترافیک با TLS رمزنگاری شده.
-- **محدودیت Origin** — متغیر محیطی `ALLOWED_ORIGIN` اختیاری برای محدود کردن اتصالات WebSocket.
+- **محدودیت Origin** — متغیر محیطی اختیاری `ALLOWED_ORIGIN`.
 
 ## 🤝 مشارکت
 
 Pull request خوش‌آمده! برای باگ یا درخواست قابلیت جدید issue باز کنید.
 
 ## 📬 ارتباط
-
-سوالی دارید؟ ایده‌ای؟ بیاید کانال:
 
 [![Telegram Channel](https://img.shields.io/badge/Telegram-@SchmitzWS-26A5E4?style=for-the-badge&logo=telegram)](https://t.me/SchmitzWS)
 
