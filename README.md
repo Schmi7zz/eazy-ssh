@@ -1,4 +1,4 @@
-<div align="center">
+div align="center">
 
 <br>
 
@@ -18,23 +18,16 @@ No app install needed. Works on iOS, Android & Desktop.
 
 <br>
 
-[**Try it →**](https://t.me/EazySSH_bot/terminal)&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;[**Telegram Channel →**](https://t.me/SchmitzWS)&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;[**Report Bug →**](../../issues)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/backend-Go-00ADD8.svg)](backend/)
+[![Telegram](https://img.shields.io/badge/platform-Telegram-26A5E4.svg)](https://telegram.org)
 
-<br>
+[Features](#-features) · [Install](#-installation) · [Manual Setup](#-manual-setup) · [Telegram Channel](https://t.me/SchmitzWS)
 
----
-
-<br>
-
-<img src="https://img.shields.io/badge/Go-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go" />&nbsp;
-<img src="https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" alt="React" />&nbsp;
-<img src="https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram" />&nbsp;
-<img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />&nbsp;
-<img src="https://img.shields.io/badge/xterm.js-000000?style=for-the-badge" alt="xterm.js" />
-
-<br>
+**[🇮🇷 مستندات فارسی](README.fa.md)**
 
 </div>
+
 ---
 
 ## ✨ Features
