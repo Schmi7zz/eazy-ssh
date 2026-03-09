@@ -49,7 +49,7 @@
 نیاز دارید: یه VPS با Docker، یه دامنه، و یه بات تلگرام.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/eazy-ssh.git
+git clone https://github.com/Schmi7zz/eazy-ssh.git
 cd eazy-ssh
 cp .env.example .env
 nano .env  # توکن بات رو وارد کن
