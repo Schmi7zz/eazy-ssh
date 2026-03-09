@@ -102,7 +102,7 @@ Create two A records pointing to your server IP:
 ```bash
 ssh root@YOUR_SERVER_IP
 
-git clone https://github.com/YOUR_USERNAME/eazy-ssh.git /opt/ssh-terminal
+git clone https://github.com/Schmi7zz/eazy-ssh.git /opt/ssh-terminal
 cd /opt/ssh-terminal
 ```
 
