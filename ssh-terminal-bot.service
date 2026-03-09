@@ -1,0 +1,12 @@
+[Unit]
+Description=EazySSH Telegram Bot
+After=network.target
+
+[Service]
+EnvironmentFile=/opt/ssh-terminal/.env
+ExecStart=/usr/bin/python3 /opt/ssh-terminal/bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

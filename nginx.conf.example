@@ -1,0 +1,32 @@
+# Eazy SSH - Nginx Configuration
+# Replace YOUR_FRONTEND_DOMAIN and YOUR_API_DOMAIN with your actual domains
+
+# Frontend - Mini App
+server {
+    listen 80;
+    server_name YOUR_FRONTEND_DOMAIN;
+
+    root /opt/ssh-terminal/frontend;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# Backend - WebSocket Proxy
+server {
+    listen 80;
+    server_name YOUR_API_DOMAIN;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+}

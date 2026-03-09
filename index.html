@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Eazy SSH</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+    body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0f0f0f; }
+    input, textarea, button { font-family: inherit; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    (function() {
+      var tw = window.Telegram && window.Telegram.WebApp;
+      var id = tw && tw.initData;
+      if (!id || id.length < 10) {
+        document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#7a7a7a;font-family:system-ui;text-align:center;padding:20px;background:#0f0f0f"><div><h2 style="margin:0 0 8px;color:#e0e0e0">⛔ Access Denied</h2><p style="margin:0;font-size:14px">This app only works inside Telegram.</p></div></div>';
+        throw new Error("blocked");
+      }
+    })();
+  </script>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+
+    // ⚠️ Replace with your WebSocket backend URL
+    const WS_URL = "wss://YOUR_API_DOMAIN/ws";
+
+    const tg = window.Telegram?.WebApp;
+    const theme = {
+      bg: tg?.themeParams?.bg_color || "#0f0f0f",
+      text: tg?.themeParams?.text_color || "#e0e0e0",
+      hint: tg?.themeParams?.hint_color || "#7a7a7a",
+      button: tg?.themeParams?.button_color || "#3b82f6",
+      buttonText: tg?.themeParams?.button_text_color || "#fff",
+      secondaryBg: tg?.themeParams?.secondary_bg_color || "#1a1a1a",
+    };
+
+    function loadServers() {
+      try { return JSON.parse(localStorage.getItem("ssh_servers") || "[]"); } catch { return []; }
+    }
+    function saveServersToStorage(servers) {
+      try { localStorage.setItem("ssh_servers", JSON.stringify(servers)); } catch {}
+    }
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        if (document.querySelector('script[src="'+src+'"]')) return resolve();
+        const s = document.createElement("script");
+        s.src = src; s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+    function loadCSS(href) {
+      return new Promise((resolve) => {
+        if (document.querySelector('link[href="'+href+'"]')) return resolve();
+        const l = document.createElement("link");
+        l.rel = "stylesheet"; l.href = href; l.onload = resolve;
+        document.head.appendChild(l);
+      });
+    }
+
+    function StatusBadge({ state }) {
+      const colors = { idle: "#7a7a7a", connecting: "#d7ba7d", connected: "#6a9955", error: "#f44747" };
+      const labels = { idle: "Idle", connecting: "...", connected: "Connected", error: "Error" };
+      return (
+        <div style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: colors[state] + "20", color: colors[state], display: "flex", alignItems: "center", gap: 5 }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: colors[state], animation: state === "connecting" ? "pulse 1s infinite" : "none" }} />
+          {labels[state]}
+          <style>{`@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.3 } }`}</style>
+        </div>
+      );
+    }
+
+    function MiniBtn({ children, onClick, danger }) {
+      return (
+        <div onClick={onClick} style={{ width: 28, height: 28, borderRadius: 6, background: danger ? "#f4474715" : "#ffffff08", color: danger ? "#f44747" : "#999", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 13 }}>
+          {children}
+        </div>
+      );
+    }
+
+    function ControlBar({ wsRef, termRef }) {
+      const [ctrlActive, setCtrlActive] = useState(false);
+      const sendInput = (data) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN)
+          wsRef.current.send(JSON.stringify({ type: "input", data }));
+      };
+      const sendCtrl = (key) => {
+        sendInput(String.fromCharCode(key.toUpperCase().charCodeAt(0) - 64));
+        setCtrlActive(false);
+      };
+      const handlePaste = async () => {
+        try { const t = await navigator.clipboard.readText(); if (t) sendInput(t); }
+        catch { const t = prompt("Paste text:"); if (t) sendInput(t); }
+      };
+      const handleCopy = () => {
+        const sel = termRef.current?.getSelection();
+        if (sel) try { navigator.clipboard.writeText(sel); } catch {}
+      };
+      const b = (active) => ({
+        padding: "6px 10px", borderRadius: 6, border: "none",
+        background: active ? theme.button : "#ffffff12", color: active ? theme.buttonText : "#ccc",
+        fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Fira Code', monospace",
+        minWidth: 36, textAlign: "center", whiteSpace: "nowrap",
+      });
+      return (
+        <div style={{ background: "#111", borderTop: "1px solid #ffffff0a", padding: "6px 8px", display: "flex", gap: 4, overflowX: "auto", flexShrink: 0 }}>
+          <button style={b(ctrlActive)} onClick={() => setCtrlActive(!ctrlActive)}>Ctrl</button>
+          {ctrlActive ? (
+            <>{["C","D","Z","L","A","R","W"].map(k => <button key={k} style={b(false)} onClick={() => sendCtrl(k)}>{k}</button>)}</>
+          ) : (
+            <>
+              <button style={b(false)} onClick={handlePaste}>Paste</button>
+              <button style={b(false)} onClick={handleCopy}>Copy</button>
+              <button style={b(false)} onClick={() => sendInput("\t")}>Tab</button>
+              <button style={b(false)} onClick={() => sendInput("\x1b")}>Esc</button>
+              <button style={b(false)} onClick={() => sendInput("\x1b[A")}>↑</button>
+              <button style={b(false)} onClick={() => sendInput("\x1b[B")}>↓</button>
+              <button style={b(false)} onClick={() => sendInput("\x1b[D")}>←</button>
+              <button style={b(false)} onClick={() => sendInput("\x1b[C")}>→</button>
+              <button style={b(false)} onClick={() => sendInput("/")}>⁄</button>
+              <button style={b(false)} onClick={() => sendInput("|")}>|</button>
+              <button style={b(false)} onClick={() => sendInput("-")}>-</button>
+              <button style={b(false)} onClick={() => sendInput("~")}>~</button>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    function ServerForm({ initial, onSave, onCancel, onQuickConnect }) {
+      const [label, setLabel] = useState(initial?.label || "");
+      const [host, setHost] = useState(initial?.host || "");
+      const [port, setPort] = useState(initial?.port?.toString() || "22");
+      const [username, setUsername] = useState(initial?.username || "root");
+      const [authType, setAuthType] = useState(initial?.authType || "password");
+      const [password, setPassword] = useState(initial?.password || "");
+      const [privateKey, setPrivateKey] = useState(initial?.privateKey || "");
+      const [passphrase, setPassphrase] = useState(initial?.passphrase || "");
+      const isValid = host && username && (authType === "password" ? password : privateKey);
+      const getData = () => ({ label, host, port: parseInt(port) || 22, username, authType, password, privateKey, passphrase });
+      const i = { width: "100%", padding: "10px 12px", background: theme.secondaryBg, border: "1px solid #ffffff12", borderRadius: 8, color: theme.text, fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit", direction: "ltr", textAlign: "left" };
+      const l = { display: "block", fontSize: 12, color: theme.hint, marginBottom: 5, fontWeight: 500 };
+      return (
+        <div style={{ padding: "20px 16px", overflowY: "auto", height: "100vh", background: theme.bg, color: theme.text }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+            <div onClick={onCancel} style={{ width: 28, height: 28, borderRadius: 6, background: "#ffffff10", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 14 }}>←</div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>{initial ? "Edit Server" : "Add Server"}</h2>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div><label style={l}>Label (optional)</label><input style={i} value={label} onChange={e => setLabel(e.target.value)} placeholder="My Server" /></div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ flex: 1 }}><label style={l}>Host</label><input style={i} value={host} onChange={e => setHost(e.target.value)} placeholder="1.2.3.4" /></div>
+              <div style={{ width: 80 }}><label style={l}>Port</label><input style={i} value={port} onChange={e => setPort(e.target.value)} placeholder="22" /></div>
+            </div>
+            <div><label style={l}>Username</label><input style={i} value={username} onChange={e => setUsername(e.target.value)} placeholder="root" /></div>
+            <div>
+              <label style={l}>Authentication</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {["password", "key"].map(t => (
+                  <div key={t} onClick={() => setAuthType(t)} style={{ flex: 1, padding: "8px", textAlign: "center", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", background: authType === t ? theme.button : "#ffffff08", color: authType === t ? theme.buttonText : theme.hint }}>
+                    {t === "password" ? "🔒 Password" : "🔑 SSH Key"}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {authType === "password" ? (
+              <div><label style={l}>Password</label><input style={i} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" /></div>
+            ) : (
+              <>
+                <div><label style={l}>Private Key</label><textarea style={{ ...i, minHeight: 100, resize: "vertical", fontFamily: "'Fira Code', monospace", fontSize: 11 }} value={privateKey} onChange={e => setPrivateKey(e.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /></div>
+                <div><label style={l}>Passphrase (optional)</label><input style={i} type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="••••••••" /></div>
+              </>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 24, paddingBottom: 40 }}>
+            <button onClick={() => isValid && onSave(getData())} disabled={!isValid} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: isValid ? theme.button : "#ffffff10", color: isValid ? theme.buttonText : theme.hint, fontSize: 15, fontWeight: 600, cursor: isValid ? "pointer" : "default" }}>Save</button>
+            <button onClick={() => isValid && onQuickConnect(getData())} disabled={!isValid} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "1px solid " + (isValid ? theme.button : "#ffffff10"), background: "transparent", color: isValid ? theme.button : theme.hint, fontSize: 15, fontWeight: 600, cursor: isValid ? "pointer" : "default" }}>Save & Connect</button>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [screen, setScreen] = useState("servers");
+      const [servers, setServers] = useState(loadServers);
+      const [editServer, setEditServer] = useState(null);
+      const [termState, setTermState] = useState("idle");
+      const [activeServer, setActiveServer] = useState(null);
+      const wsRef = useRef(null);
+      const termRef = useRef(null);
+      const termContainerRef = useRef(null);
+      const fitAddonRef = useRef(null);
+
+      useEffect(() => { tg?.expand?.(); tg?.ready?.(); }, []);
+      useEffect(() => { saveServersToStorage(servers); }, [servers]);
+
+      const loadXterm = useCallback(async () => {
+        if (window._xtermLoaded) return;
+        await loadCSS("https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css");
+        await loadScript("https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js");
+        await loadScript("https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js");
+        await loadScript("https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js");
+        window._xtermLoaded = true;
+      }, []);
+
+      const connectToServer = useCallback(async (server) => {
+        setActiveServer(server);
+        setScreen("terminal");
+        setTermState("connecting");
+        await loadXterm();
+        setTimeout(() => {
+          const container = termContainerRef.current;
+          if (!container) return;
+          container.innerHTML = "";
+          const term = new window.Terminal({
+            cursorBlink: true, fontSize: 14,
+            fontFamily: "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
+            theme: { background: "#0c0c0c", foreground: "#d4d4d4", cursor: "#3b82f6", selectionBackground: "#3b82f640" },
+            scrollback: 5000,
+          });
+          const fitAddon = new window.FitAddon.FitAddon();
+          term.loadAddon(fitAddon);
+          if (window.WebLinksAddon) term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+          term.open(container);
+          fitAddon.fit();
+          termRef.current = term;
+          fitAddonRef.current = fitAddon;
+          term.writeln("\x1b[36m⟩ Connecting to " + server.host + "...\x1b[0m\r\n");
+          const ws = new WebSocket(WS_URL);
+          wsRef.current = ws;
+          ws.onopen = () => {
+            const payload = { host: server.host, port: parseInt(server.port) || 22, username: server.username, auth_type: server.authType };
+            payload.init_data = tg?.initData || "";
+            if (server.authType === "password") payload.password = server.password;
+            else { payload.private_key = server.privateKey; if (server.passphrase) payload.passphrase = server.passphrase; }
+            ws.send(JSON.stringify(payload));
+          };
+          ws.onmessage = (e) => {
+            try {
+              const msg = JSON.parse(e.data);
+              if (msg.type === "connected") { setTermState("connected"); term.writeln("\x1b[32m✓ Connected!\x1b[0m\r\n"); fitAddon.fit(); ws.send(JSON.stringify({ type: "resize", data: { cols: term.cols, rows: term.rows } })); }
+              else if (msg.type === "output") { term.write(msg.data); }
+              else if (msg.type === "error") { setTermState("error"); term.writeln("\r\n\x1b[31m✗ " + msg.data + "\x1b[0m"); }
+              else if (msg.type === "disconnected") { setTermState("idle"); term.writeln("\r\n\x1b[33m⟩ Disconnected\x1b[0m"); }
+            } catch {}
+          };
+          ws.onerror = () => { setTermState("error"); term.writeln("\r\n\x1b[31m✗ WebSocket error\x1b[0m"); };
+          ws.onclose = () => { setTermState("idle"); term.writeln("\r\n\x1b[33m⟩ Connection closed\x1b[0m"); };
+          term.onData((data) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data: data })); });
+          term.onResize(({ cols, rows }) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", data: { cols, rows } })); });
+          new ResizeObserver(() => { try { fitAddon.fit(); } catch {} }).observe(container);
+        }, 150);
+      }, [loadXterm]);
+
+      const disconnect = useCallback(() => {
+        try { wsRef.current?.send(JSON.stringify({ type: "disconnect" })); wsRef.current?.close(); } catch {}
+        try { termRef.current?.dispose(); } catch {}
+        setScreen("servers"); setTermState("idle");
+      }, []);
+
+      const saveServer = (srv) => {
+        if (editServer?.id) setServers(prev => prev.map(s => s.id === editServer.id ? { ...srv, id: s.id } : s));
+        else setServers(prev => [...prev, { ...srv, id: Date.now().toString() }]);
+        setEditServer(null); setScreen("servers");
+      };
+
+      if (screen === "terminal") {
+        return (
+          <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: theme.bg, color: theme.text }}>
+            <div style={{ padding: "10px 12px", background: theme.secondaryBg, borderBottom: "1px solid #ffffff0a", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+              <div onClick={disconnect} style={{ width: 28, height: 28, borderRadius: 6, background: "#ffffff10", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 14 }}>←</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activeServer?.label || activeServer?.host}</div>
+                <div style={{ fontSize: 11, color: theme.hint }}>{activeServer?.username}@{activeServer?.host}</div>
+              </div>
+              <StatusBadge state={termState} />
+            </div>
+            <div ref={termContainerRef} style={{ flex: 1, background: "#0c0c0c", overflow: "hidden" }} />
+            <ControlBar wsRef={wsRef} termRef={termRef} />
+          </div>
+        );
+      }
+
+      if (screen === "connect") {
+        return <ServerForm initial={editServer} onSave={saveServer} onCancel={() => setScreen("servers")}
+          onQuickConnect={(srv) => {
+            const n = { ...srv, id: editServer?.id || Date.now().toString() };
+            if (editServer?.id) setServers(prev => prev.map(s => s.id === editServer.id ? n : s));
+            else setServers(prev => [...prev, n]);
+            setEditServer(null);
+            setTimeout(() => connectToServer(n), 50);
+          }} />;
+      }
+
+      return (
+        <div style={{ minHeight: "100vh", background: theme.bg, color: theme.text }}>
+          <div style={{ padding: "20px 16px 16px", background: "linear-gradient(135deg, " + theme.secondaryBg + ", " + theme.bg + ")", borderBottom: "1px solid #ffffff0a" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+              <span style={{ fontSize: 20 }}>⬡</span>
+              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em" }}>Eazy SSH</h1>
+            </div>
+            <p style={{ margin: "6px 0 0", color: theme.hint, fontSize: 13 }}>{servers.length} server{servers.length !== 1 ? "s" : ""}</p>
+          </div>
+          <div style={{ padding: "12px 16px" }}>
+            {servers.length === 0 && (
+              <div style={{ textAlign: "center", padding: "48px 20px", color: theme.hint }}>
+                <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>⬡</div>
+                <p style={{ fontSize: 15, margin: 0 }}>No servers yet</p>
+                <p style={{ fontSize: 13, margin: "4px 0 0", opacity: 0.6 }}>Tap + to add your first server</p>
+              </div>
+            )}
+            {servers.map(srv => (
+              <div key={srv.id} style={{ background: theme.secondaryBg, borderRadius: 12, padding: "14px 16px", marginBottom: 8, border: "1px solid #ffffff08", display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#6a9955", flexShrink: 0, boxShadow: "0 0 6px #6a995580" }} />
+                <div style={{ flex: 1, cursor: "pointer", minWidth: 0 }} onClick={() => connectToServer(srv)}>
+                  <div style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{srv.label || srv.host}</div>
+                  <div style={{ fontSize: 12, color: theme.hint, marginTop: 2 }}>{srv.username}@{srv.host}:{srv.port || 22}<span style={{ marginLeft: 8, opacity: 0.6 }}>{srv.authType === "key" ? "🔑" : "🔒"}</span></div>
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <MiniBtn onClick={() => { setEditServer(srv); setScreen("connect"); }}>✎</MiniBtn>
+                  <MiniBtn onClick={() => setServers(p => p.filter(s => s.id !== srv.id))} danger>✕</MiniBtn>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div onClick={() => { setEditServer(null); setScreen("connect"); }} style={{ position: "fixed", bottom: 24, right: 20, width: 52, height: 52, borderRadius: "50%", background: theme.button, color: theme.buttonText, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 300, cursor: "pointer", boxShadow: "0 4px 20px " + theme.button + "60" }}>+</div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
