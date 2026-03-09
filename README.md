@@ -20,6 +20,8 @@ No app install needed. Works on iOS, Android & Desktop.
 
 [**Try it →**](https://t.me/EazySSH_bot/terminal)&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;[**Telegram Channel →**](https://t.me/SchmitzWS)&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;[**Report Bug →**](../../issues)
 
+**[🇮🇷 مستندات فارسی](README.fa.md)**
+
 <br>
 
 ---
