@@ -207,14 +207,14 @@ else
     success "Docker found: $(docker --version | cut -d' ' -f3 | tr -d ',')"
 fi
 
-if docker compose version &> /dev/null 2>&1; then
+if docker compose version > /dev/null 2>&1; then
     COMPOSE="docker compose"
-elif command -v docker-compose &> /dev/null; then
+elif command -v docker-compose > /dev/null 2>&1; then
     COMPOSE="docker-compose"
 else
     info "Installing docker-compose..."
     apt-get install -y -qq docker-compose > /dev/null 2>&1
-    if command -v docker-compose &> /dev/null; then
+    if command -v docker-compose > /dev/null 2>&1; then
         COMPOSE="docker-compose"
     else
         COMPOSE="docker compose"
@@ -294,7 +294,16 @@ echo ""
 
 cd "$INSTALL_DIR"
 info "Building Docker container (this may take a minute)..."
-$COMPOSE up -d --build > /dev/null 2>&1
+BUILD_LOG="/tmp/eazy-ssh-build.log"
+$COMPOSE up -d --build > "$BUILD_LOG" 2>&1
+BUILD_EXIT=$?
+
+if [[ $BUILD_EXIT -ne 0 ]]; then
+    fail "Docker build failed:"
+    tail -20 "$BUILD_LOG"
+    exit 1
+fi
+
 sleep 3
 if curl -s http://localhost:8080/health | grep -q "ok"; then
     success "Backend is running"
@@ -304,7 +313,8 @@ else
     if curl -s http://localhost:8080/health | grep -q "ok"; then
         success "Backend is running"
     else
-        fail "Backend failed to start. Check: $COMPOSE logs"
+        fail "Backend failed to start. Logs:"
+        $COMPOSE logs --tail 20
         exit 1
     fi
 fi
