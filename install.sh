@@ -228,9 +228,18 @@ echo ""
 
 INSTALL_DIR="/opt/ssh-terminal"
 
+# Save script source before potentially deleting it
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+TEMP_COPY=""
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/backend/main.go" ]]; then
+    TEMP_COPY="/tmp/eazy-ssh-install-$$"
+    cp -r "$SCRIPT_DIR" "$TEMP_COPY" 2>/dev/null
+fi
+
 if [[ -d "$INSTALL_DIR" ]]; then
     warn "Directory $INSTALL_DIR already exists"
     if confirm "Remove and reinstall?"; then
+        cd /root 2>/dev/null || cd /tmp
         rm -rf "$INSTALL_DIR"
     else
         fail "Aborted"
@@ -238,9 +247,9 @@ if [[ -d "$INSTALL_DIR" ]]; then
     fi
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$SCRIPT_DIR/backend/main.go" ]]; then
-    cp -r "$SCRIPT_DIR" "$INSTALL_DIR"
+if [[ -n "$TEMP_COPY" && -f "$TEMP_COPY/backend/main.go" ]]; then
+    cp -r "$TEMP_COPY" "$INSTALL_DIR"
+    rm -rf "$TEMP_COPY"
     success "Copied from local directory"
 else
     git clone https://github.com/Schmi7zz/eazy-ssh.git "$INSTALL_DIR" > /dev/null 2>&1 &
