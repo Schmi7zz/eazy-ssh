@@ -195,28 +195,35 @@ success "Packages installed"
 
 if ! command -v docker &> /dev/null; then
     warn "Docker not found. Installing..."
-    curl -fsSL https://get.docker.com | sh > /dev/null 2>&1 &
-    spinner $! "Installing Docker..."
-    success "Docker installed"
+    info "This may take a minute..."
+    curl -fsSL https://get.docker.com | sh > /dev/null 2>&1
+    if command -v docker &> /dev/null; then
+        success "Docker installed: $(docker --version | cut -d' ' -f3 | tr -d ',')"
+    else
+        fail "Docker installation failed. Install manually: curl -fsSL https://get.docker.com | sh"
+        exit 1
+    fi
 else
     success "Docker found: $(docker --version | cut -d' ' -f3 | tr -d ',')"
 fi
 
-if docker compose version &> /dev/null; then
+if docker compose version &> /dev/null 2>&1; then
     COMPOSE="docker compose"
 elif command -v docker-compose &> /dev/null; then
     COMPOSE="docker-compose"
 else
     info "Installing docker-compose..."
-    apt-get install -y -qq docker-compose > /dev/null 2>&1 &
-    spinner $! "Installing docker-compose..."
-    COMPOSE="docker-compose"
+    apt-get install -y -qq docker-compose > /dev/null 2>&1
+    if command -v docker-compose &> /dev/null; then
+        COMPOSE="docker-compose"
+    else
+        COMPOSE="docker compose"
+    fi
 fi
 success "Compose: $COMPOSE"
 
 info "Installing python-telegram-bot..."
-pip3 install python-telegram-bot --break-system-packages -q > /dev/null 2>&1 &
-spinner $! "Installing python-telegram-bot..."
+pip3 install python-telegram-bot --break-system-packages -q > /dev/null 2>&1
 success "python-telegram-bot installed"
 
 # ═══════════════════════════════════════
@@ -287,15 +294,13 @@ echo ""
 
 cd "$INSTALL_DIR"
 info "Building Docker container (this may take a minute)..."
-$COMPOSE up -d --build > /dev/null 2>&1 &
-spinner $! "Building Go backend..."
-
-sleep 2
+$COMPOSE up -d --build > /dev/null 2>&1
+sleep 3
 if curl -s http://localhost:8080/health | grep -q "ok"; then
     success "Backend is running"
 else
-    warn "Backend might still be starting... checking again in 5s"
-    sleep 5
+    warn "Backend might still be starting... checking again in 10s"
+    sleep 10
     if curl -s http://localhost:8080/health | grep -q "ok"; then
         success "Backend is running"
     else
@@ -372,8 +377,7 @@ certbot --nginx \
     --non-interactive \
     --agree-tos \
     --email "$SSL_EMAIL" \
-    --redirect > /dev/null 2>&1 &
-spinner $! "Getting SSL certificate..."
+    --redirect > /dev/null 2>&1
 
 if [[ $? -eq 0 ]]; then
     success "SSL certificate installed"
