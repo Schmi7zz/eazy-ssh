@@ -237,14 +237,12 @@ if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/backend/main.go" ]]; then
 fi
 
 if [[ -d "$INSTALL_DIR" ]]; then
-    warn "Directory $INSTALL_DIR already exists"
-    if confirm "Remove and reinstall?"; then
-        cd /root 2>/dev/null || cd /tmp
-        rm -rf "$INSTALL_DIR"
-    else
-        fail "Aborted"
-        exit 1
-    fi
+    success "Directory $INSTALL_DIR exists — updating..."
+    # Backup .env and users.json
+    [[ -f "$INSTALL_DIR/.env" ]] && cp "$INSTALL_DIR/.env" /tmp/.env.backup.$$ 2>/dev/null
+    [[ -f "$INSTALL_DIR/users.json" ]] && cp "$INSTALL_DIR/users.json" /tmp/users.json.backup.$$ 2>/dev/null
+    cd /root 2>/dev/null || cd /tmp
+    rm -rf "$INSTALL_DIR"
 fi
 
 if [[ -n "$TEMP_COPY" && -f "$TEMP_COPY/backend/main.go" ]]; then
@@ -265,6 +263,10 @@ USERS_FILE=${INSTALL_DIR}/users.json
 ENVEOF
 chmod 600 "$INSTALL_DIR/.env"
 success "Environment file created"
+
+# Restore users.json backup if exists
+[[ -f /tmp/users.json.backup.$$ ]] && cp /tmp/users.json.backup.$$ "$INSTALL_DIR/users.json" && rm /tmp/users.json.backup.$$ && success "User data restored"
+[[ -f /tmp/.env.backup.$$ ]] && rm /tmp/.env.backup.$$
 
 FRONTEND_FILE="$INSTALL_DIR/frontend/index.html"
 if [[ -f "$FRONTEND_FILE" ]]; then
