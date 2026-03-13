@@ -1,347 +1,729 @@
 <!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Eazy SSH</title>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+  <title>SSH Terminal</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    html, body, #root { height: 100%; width: 100%; overflow: hidden; }
-    body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0f0f0f; }
-    input, textarea, button { font-family: inherit; }
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+    *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body,#root{height:100%;width:100%;overflow:hidden}
+    body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0f0f0f}
+    input,textarea,button,select{font-family:inherit}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+    .hide-scroll::-webkit-scrollbar{height:0}
+    .ace_editor{font-family:'Fira Code','JetBrains Mono','Cascadia Code','SF Mono',monospace!important}
+    .ace_gutter{background:#1a1a1a!important;border-right:1px solid #ffffff10!important}
+    .ace_error{position:relative}
+    .ace_gutter-cell.ace_error{background:none!important;color:#f44747!important}
+    .ace_gutter-cell.ace_warning{background:none!important;color:#d7ba7d!important}
+    .editor-toolbar-btn{padding:6px 10px;border-radius:6px;border:none;background:#ffffff0c;color:#ccc;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;white-space:nowrap;font-family:inherit;transition:background .15s}
+    .editor-toolbar-btn:active{background:#ffffff20}
+    .editor-toolbar-btn.primary{background:#3b82f6;color:#fff}
+    .editor-toolbar-btn.primary:active{background:#2563eb}
+    .editor-modified{background:#d7ba7d!important;color:#000!important;font-weight:600}
   </style>
 </head>
 <body>
-  <div id="root"></div>
+<div id="root"></div>
+<script>
+(function(){var tw=window.Telegram&&window.Telegram.WebApp;var id=tw&&tw.initData;
+if(!id||id.length<10){document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#7a7a7a;font-family:system-ui;text-align:center;padding:20px;background:#0f0f0f"><div><h2 style="margin:0 0 8px;color:#e0e0e0">⛔ Access Denied</h2><p style="margin:0;font-size:14px">This app only works inside Telegram.<br><br><a href="https://t.me/YOUR_BOT/terminal" style="color:#3b82f6;text-decoration:none">➜ Open in Telegram</a></p></div></div>';throw new Error("blocked");}
+})();
+</script>
+<script type="text/babel">
+const{useState,useRef,useEffect,useCallback}=React;
+const WS_BASE="wss://ssh-api.yourdomain.com";
+const WS_URL=WS_BASE+"/ws";
+const SFTP_URL=WS_BASE+"/sftp";
+const tg=window.Telegram?.WebApp;
+const th={bg:tg?.themeParams?.bg_color||"#0f0f0f",text:tg?.themeParams?.text_color||"#e0e0e0",hint:tg?.themeParams?.hint_color||"#7a7a7a",button:tg?.themeParams?.button_color||"#3b82f6",buttonText:tg?.themeParams?.button_text_color||"#fff",secondaryBg:tg?.themeParams?.secondary_bg_color||"#1a1a1a"};
 
-  <script>
-    (function() {
-      var tw = window.Telegram && window.Telegram.WebApp;
-      var id = tw && tw.initData;
-      if (!id || id.length < 10) {
-        document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#7a7a7a;font-family:system-ui;text-align:center;padding:20px;background:#0f0f0f"><div><h2 style="margin:0 0 8px;color:#e0e0e0">⛔ Access Denied</h2><p style="margin:0;font-size:14px">This app only works inside Telegram.</p></div></div>';
-        throw new Error("blocked");
-      }
-    })();
-  </script>
+// ─── Terminal Themes ───
+const TERM_THEMES={
+  dark:{name:"Dark",background:"#0c0c0c",foreground:"#d4d4d4",cursor:"#3b82f6",selectionBackground:"#3b82f640",black:"#0c0c0c",red:"#f44747",green:"#6a9955",yellow:"#d7ba7d",blue:"#569cd6",magenta:"#c586c0",cyan:"#4ec9b0",white:"#d4d4d4"},
+  light:{name:"Light",background:"#f5f5f5",foreground:"#1e1e1e",cursor:"#3b82f6",selectionBackground:"#add6ff80",black:"#1e1e1e",red:"#cd3131",green:"#008000",yellow:"#795e26",blue:"#0451a5",magenta:"#bc05bc",cyan:"#0598bc",white:"#f5f5f5"},
+  dracula:{name:"Dracula",background:"#282a36",foreground:"#f8f8f2",cursor:"#f8f8f2",selectionBackground:"#44475a",black:"#21222c",red:"#ff5555",green:"#50fa7b",yellow:"#f1fa8c",blue:"#bd93f9",magenta:"#ff79c6",cyan:"#8be9fd",white:"#f8f8f2"},
+  monokai:{name:"Monokai",background:"#272822",foreground:"#f8f8f2",cursor:"#f8f8f0",selectionBackground:"#49483e",black:"#272822",red:"#f92672",green:"#a6e22e",yellow:"#e6db74",blue:"#66d9ef",magenta:"#ae81ff",cyan:"#a1efe4",white:"#f8f8f2"},
+};
 
-  <script type="text/babel">
-    const { useState, useRef, useEffect, useCallback } = React;
+// ─── Editor Themes ───
+const EDITOR_THEMES=["monokai","twilight","tomorrow_night_eighties","dracula","cobalt","github_dark","solarized_dark","terminal","chaos","clouds_midnight"];
 
-    // ⚠️ Replace with your WebSocket backend URL
-    const WS_URL = "wss://YOUR_API_DOMAIN/ws";
+// ─── i18n ───
+const LANGS={
+  en:{title:"SSH Terminal",servers:"servers",noServers:"No servers yet",noServersTip:"Tap + to add your first server",addServer:"Add Server",editServer:"Edit Server",label:"Label (optional)",host:"Host",port:"Port",username:"Username",auth:"Authentication",password:"Password",privateKey:"Private Key",passphrase:"Passphrase (optional)",save:"Save",saveConnect:"Save & Connect",connected:"Connected",connecting:"...",idle:"Idle",error:"Error",sessions:"active sessions",langBtn:"فا",passwordAuth:"🔒 Password",keyAuth:"🔑 SSH Key",deleteServer:"Delete",sftp:"SFTP",ssh:"SSH",upload:"Upload",newFolder:"New Folder",download:"Download",delete:"Delete",rename:"Rename",empty:"Empty folder",loading:"Loading...",tags:"Tags",folder:"Folder",addTag:"+ Tag",addFolder:"+ Folder",all:"All",noFolder:"Ungrouped",termTheme:"Theme",settings:"Settings",folderName:"Folder name",tagName:"Tag name",manageFolders:"Manage Folders",edit:"Edit",editor:"Editor",saving:"Saving...",saved:"Saved!",modified:"Modified",search:"Search",undo:"Undo",redo:"Redo",wordWrap:"Wrap",editorTheme:"Editor Theme",fileTooLarge:"File too large for editor (max 2MB)"},
+  fa:{title:"ترمینال SSH",servers:"سرور",noServers:"هنوز سروری اضافه نشده",noServersTip:"روی + بزن تا اولین سرورت رو اضافه کنی",addServer:"افزودن سرور",editServer:"ویرایش سرور",label:"نام (اختیاری)",host:"آدرس سرور",port:"پورت",username:"نام کاربری",auth:"احراز هویت",password:"رمز عبور",privateKey:"کلید خصوصی",passphrase:"رمز کلید (اختیاری)",save:"ذخیره",saveConnect:"ذخیره و اتصال",connected:"متصل",connecting:"...",idle:"آماده",error:"خطا",sessions:"سشن فعال",langBtn:"EN",passwordAuth:"🔒 رمز عبور",keyAuth:"🔑 کلید SSH",deleteServer:"حذف",sftp:"SFTP",ssh:"SSH",upload:"آپلود",newFolder:"پوشه جدید",download:"دانلود",delete:"حذف",rename:"تغییر نام",empty:"پوشه خالی",loading:"در حال بارگذاری...",tags:"تگ‌ها",folder:"پوشه",addTag:"+ تگ",addFolder:"+ پوشه",all:"همه",noFolder:"بدون گروه",termTheme:"تم",settings:"تنظیمات",folderName:"نام پوشه",tagName:"نام تگ",manageFolders:"مدیریت پوشه‌ها",edit:"ویرایش",editor:"ویرایشگر",saving:"ذخیره...",saved:"ذخیره شد!",modified:"تغییر یافته",search:"جستجو",undo:"بازگشت",redo:"بازانجام",wordWrap:"شکست خط",editorTheme:"تم ویرایشگر",fileTooLarge:"فایل برای ویرایش بزرگ است (حداکثر 2 مگابایت)"}
+};
 
-    const tg = window.Telegram?.WebApp;
-    const theme = {
-      bg: tg?.themeParams?.bg_color || "#0f0f0f",
-      text: tg?.themeParams?.text_color || "#e0e0e0",
-      hint: tg?.themeParams?.hint_color || "#7a7a7a",
-      button: tg?.themeParams?.button_color || "#3b82f6",
-      buttonText: tg?.themeParams?.button_text_color || "#fff",
-      secondaryBg: tg?.themeParams?.secondary_bg_color || "#1a1a1a",
+// ─── Storage ───
+function loadServers(){try{return JSON.parse(localStorage.getItem("ssh_servers")||"[]")}catch{return[]}}
+function saveServersToStorage(s){try{localStorage.setItem("ssh_servers",JSON.stringify(s))}catch{}}
+function loadLang(){return localStorage.getItem("ssh_lang")||"en"}
+function saveLang(l){localStorage.setItem("ssh_lang",l)}
+function loadTermTheme(){return localStorage.getItem("ssh_term_theme")||"dark"}
+function saveTermTheme(t){localStorage.setItem("ssh_term_theme",t)}
+function loadFolders(){try{return JSON.parse(localStorage.getItem("ssh_folders")||"[]")}catch{return[]}}
+function saveFolders(f){try{localStorage.setItem("ssh_folders",JSON.stringify(f))}catch{}}
+function loadEditorTheme(){return localStorage.getItem("ssh_editor_theme")||"monokai"}
+function saveEditorTheme(t){localStorage.setItem("ssh_editor_theme",t)}
+
+function loadScript(src){return new Promise((r,j)=>{if(document.querySelector('script[src="'+src+'"]'))return r();const s=document.createElement("script");s.src=src;s.onload=r;s.onerror=j;document.head.appendChild(s)})}
+function loadCSS(href){return new Promise(r=>{if(document.querySelector('link[href="'+href+'"]'))return r();const l=document.createElement("link");l.rel="stylesheet";l.href=href;l.onload=r;document.head.appendChild(l)})}
+function humanSize(b){if(b<1024)return b+" B";if(b<1048576)return(b/1024).toFixed(1)+" KB";if(b<1073741824)return(b/1048576).toFixed(1)+" MB";return(b/1073741824).toFixed(1)+" GB"}
+function fileIcon(name,isDir){if(isDir)return"📁";const e=name.split(".").pop().toLowerCase();const m={js:"📄",py:"🐍",go:"🔷",sh:"⚙️",json:"📋",yml:"📋",yaml:"📋",md:"📝",txt:"📝",log:"📝",html:"🌐",css:"🎨",jpg:"🖼",jpeg:"🖼",png:"🖼",gif:"🖼",svg:"🖼",mp4:"🎬",mp3:"🎵",zip:"📦",tar:"📦",gz:"📦",pdf:"📕",conf:"⚙️",cfg:"⚙️",env:"🔒",key:"🔑",pem:"🔑",pub:"🔑",ts:"📄",tsx:"📄",jsx:"📄",php:"🐘",rb:"💎",rs:"🦀",c:"⚡",cpp:"⚡",h:"⚡",java:"☕",sql:"🗃",xml:"📋",toml:"📋",ini:"📋",dockerfile:"🐳"};return m[e]||"📄"}
+
+// ─── Ace Editor Helpers ───
+const ACE_CDN="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.6";
+let aceLoaded=false;
+
+async function loadAce(){
+  if(aceLoaded)return;
+  await loadScript(ACE_CDN+"/ace.min.js");
+  await loadScript(ACE_CDN+"/ext-language_tools.min.js");
+  aceLoaded=true;
+}
+
+function getAceMode(filename){
+  const ext=filename.split(".").pop().toLowerCase();
+  const map={
+    js:"javascript",jsx:"jsx",ts:"typescript",tsx:"tsx",
+    py:"python",go:"golang",rs:"rust",rb:"ruby",
+    sh:"sh",bash:"sh",zsh:"sh",
+    json:"json",yml:"yaml",yaml:"yaml",toml:"toml",ini:"ini",
+    md:"markdown",txt:"text",log:"text",
+    html:"html",htm:"html",xml:"xml",svg:"xml",
+    css:"css",scss:"scss",less:"less",
+    php:"php",java:"java",c:"c_cpp",cpp:"c_cpp",h:"c_cpp",
+    sql:"sql",lua:"lua",perl:"perl",r:"r",
+    dockerfile:"dockerfile",makefile:"makefile",
+    conf:"properties",cfg:"properties",env:"properties",
+    gitignore:"gitignore",nginx:"nginx",apache_conf:"apache_conf",
+  };
+  // Special filenames
+  const fname=filename.toLowerCase();
+  if(fname==="dockerfile")return"dockerfile";
+  if(fname==="makefile"||fname==="gnumakefile")return"makefile";
+  if(fname===".gitignore")return"gitignore";
+  if(fname==="nginx.conf")return"nginx";
+  return map[ext]||"text";
+}
+
+function isTextFile(name){
+  const ext=name.split(".").pop().toLowerCase();
+  const textExts=["js","jsx","ts","tsx","py","go","rs","rb","sh","bash","zsh","json","yml","yaml","toml","ini","md","txt","log","html","htm","xml","svg","css","scss","less","php","java","c","cpp","h","hpp","sql","lua","perl","r","conf","cfg","env","gitignore","makefile","dockerfile","properties","bat","ps1","fish","csh","awk","sed","vim","tmux","service","timer","socket","mount","path","nix","tf","hcl","prisma","graphql","gql","proto","pem","pub","crt","key"];
+  const fname=name.toLowerCase();
+  if(["dockerfile","makefile","gnumakefile",".gitignore",".env",".bashrc",".zshrc",".profile",".vimrc","license","readme","changelog","todo"].includes(fname))return true;
+  return textExts.includes(ext);
+}
+
+// ─── Small Components ───
+function StatusDot({state}){const c={idle:"#7a7a7a",connecting:"#d7ba7d",connected:"#6a9955",error:"#f44747"};return<div style={{width:6,height:6,borderRadius:"50%",background:c[state]||c.idle,animation:state==="connecting"?"pulse 1s infinite":"none",flexShrink:0}}/>}
+function StatusBadge({state,t}){const c={idle:"#7a7a7a",connecting:"#d7ba7d",connected:"#6a9955",error:"#f44747"};const l={idle:t.idle,connecting:t.connecting,connected:t.connected,error:t.error};return<div style={{padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:c[state]+"20",color:c[state],display:"flex",alignItems:"center",gap:5}}><StatusDot state={state}/>{l[state]}<style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}`}</style></div>}
+function MiniBtn({children,onClick,danger,active,title}){return<div onClick={onClick} title={title} style={{width:28,height:28,borderRadius:6,background:danger?"#f4474715":active?"#3b82f620":"#ffffff08",color:danger?"#f44747":active?"#3b82f6":"#999",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:13}}>{children}</div>}
+
+function ControlBar({ws,term}){
+  const[ca,setCa]=useState(false);
+  const send=d=>{if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:"input",data:d}))};
+  const sc=k=>{send(String.fromCharCode(k.toUpperCase().charCodeAt(0)-64));setCa(false)};
+  const paste=async()=>{try{const t=await navigator.clipboard.readText();if(t)send(t)}catch{const t=prompt("Paste:");if(t)send(t)}};
+  const copy=()=>{const s=term?.getSelection();if(s)try{navigator.clipboard.writeText(s)}catch{}};
+  const bs=a=>({padding:"6px 10px",borderRadius:6,border:"none",background:a?th.button:"#ffffff12",color:a?th.buttonText:"#ccc",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Fira Code',monospace",minWidth:36,textAlign:"center",whiteSpace:"nowrap"});
+  return<div style={{background:"#111",borderTop:"1px solid #ffffff0a",padding:"6px 8px",display:"flex",gap:4,overflowX:"auto",flexShrink:0}}>
+    <button style={bs(ca)} onClick={()=>setCa(!ca)}>Ctrl</button>
+    {ca?["C","D","Z","L","A","R","W"].map(k=><button key={k} style={bs(false)} onClick={()=>sc(k)}>{k}</button>)
+    :<><button style={bs(false)} onClick={paste}>Paste</button><button style={bs(false)} onClick={copy}>Copy</button><button style={bs(false)} onClick={()=>send("\t")}>Tab</button><button style={bs(false)} onClick={()=>send("\x1b")}>Esc</button><button style={bs(false)} onClick={()=>send("\x1b[A")}>↑</button><button style={bs(false)} onClick={()=>send("\x1b[B")}>↓</button><button style={bs(false)} onClick={()=>send("\x1b[D")}>←</button><button style={bs(false)} onClick={()=>send("\x1b[C")}>→</button><button style={bs(false)} onClick={()=>send("/")}>/</button><button style={bs(false)} onClick={()=>send("|")}>|</button><button style={bs(false)} onClick={()=>send("-")}>-</button><button style={bs(false)} onClick={()=>send("~")}>~</button></>}
+  </div>;
+}
+
+function SessionTabs({sessions,activeId,onSwitch,onClose}){
+  if(!sessions.length)return null;
+  return<div className="hide-scroll" style={{display:"flex",gap:4,padding:"6px 8px",background:th.secondaryBg,overflowX:"auto",flexShrink:0,borderBottom:"1px solid #ffffff08"}}>
+    {sessions.map(s=><div key={s.id} onClick={()=>onSwitch(s.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 8px",borderRadius:6,fontSize:12,cursor:"pointer",whiteSpace:"nowrap",background:s.id===activeId?th.button+"30":"#ffffff08",color:s.id===activeId?th.text:th.hint,border:s.id===activeId?"1px solid "+th.button+"50":"1px solid transparent"}}>
+      <StatusDot state={s.state}/><span style={{maxWidth:80,overflow:"hidden",textOverflow:"ellipsis"}}>{s.label||s.host}</span>
+      <span onClick={e=>{e.stopPropagation();onClose(s.id)}} style={{marginLeft:2,opacity:.5,fontSize:10,cursor:"pointer",padding:"0 2px"}}>✕</span>
+    </div>)}
+  </div>;
+}
+
+function TagPill({tag,active,onClick,onRemove}){
+  return<div onClick={onClick} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:500,cursor:"pointer",background:active?th.button+"25":"#ffffff08",color:active?th.button:th.hint,border:active?"1px solid "+th.button+"40":"1px solid transparent",whiteSpace:"nowrap"}}>
+    {tag}{onRemove&&<span onClick={e=>{e.stopPropagation();onRemove()}} style={{opacity:.5,fontSize:9,cursor:"pointer"}}>✕</span>}
+  </div>;
+}
+
+// ─── File Editor ───
+function FileEditor({filePath,fileName,server,wsRef,onClose,t,lang}){
+  const[content,setContent]=useState(null);
+  const[loading,setLoading]=useState(true);
+  const[saving,setSaving]=useState(false);
+  const[saveMsg,setSaveMsg]=useState("");
+  const[modified,setModified]=useState(false);
+  const[editorTheme,setEditorTheme]=useState(loadEditorTheme);
+  const[wordWrap,setWordWrap]=useState(false);
+  const[editorInfo,setEditorInfo]=useState({line:1,col:1,lines:0,errors:0,warnings:0});
+  const editorRef=useRef(null);
+  const containerRef=useRef(null);
+  const originalContent=useRef("");
+  const rtl=lang==="fa";
+  const mode=getAceMode(fileName);
+
+  // Load file content via SFTP WebSocket download
+  useEffect(()=>{
+    const ws=wsRef.current;
+    if(!ws||ws.readyState!==WebSocket.OPEN)return;
+
+    const handler=e=>{
+      try{
+        const m=JSON.parse(e.data);
+        if(m.type==="download"&&m.name===fileName.split("/").pop()){
+          // Decode base64 to text
+          try{
+            const raw=atob(m.data);
+            // Try UTF-8 decode
+            const bytes=new Uint8Array(raw.length);
+            for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+            const text=new TextDecoder("utf-8").decode(bytes);
+            originalContent.current=text;
+            setContent(text);
+          }catch{
+            setContent(atob(m.data));
+            originalContent.current=atob(m.data);
+          }
+          setLoading(false);
+        }else if(m.type==="upload_ok"){
+          setSaving(false);
+          setSaveMsg("✅");
+          setModified(false);
+          originalContent.current=editorRef.current?.getValue()||"";
+          setTimeout(()=>setSaveMsg(""),2000);
+        }else if(m.type==="error"){
+          if(saving){setSaving(false);setSaveMsg("❌ "+m.data);setTimeout(()=>setSaveMsg(""),3000);}
+          else{setLoading(false);setContent("Error: "+m.data);}
+        }
+      }catch{}
     };
 
-    function loadServers() {
-      try { return JSON.parse(localStorage.getItem("ssh_servers") || "[]"); } catch { return []; }
-    }
-    function saveServersToStorage(servers) {
-      try { localStorage.setItem("ssh_servers", JSON.stringify(servers)); } catch {}
-    }
+    ws.addEventListener("message",handler);
+    // Request file download
+    ws.send(JSON.stringify({action:"download",path:filePath}));
 
-    function loadScript(src) {
-      return new Promise((resolve, reject) => {
-        if (document.querySelector('script[src="'+src+'"]')) return resolve();
-        const s = document.createElement("script");
-        s.src = src; s.onload = resolve; s.onerror = reject;
-        document.head.appendChild(s);
-      });
-    }
-    function loadCSS(href) {
-      return new Promise((resolve) => {
-        if (document.querySelector('link[href="'+href+'"]')) return resolve();
-        const l = document.createElement("link");
-        l.rel = "stylesheet"; l.href = href; l.onload = resolve;
-        document.head.appendChild(l);
-      });
-    }
+    return()=>ws.removeEventListener("message",handler);
+  },[filePath]);
 
-    function StatusBadge({ state }) {
-      const colors = { idle: "#7a7a7a", connecting: "#d7ba7d", connected: "#6a9955", error: "#f44747" };
-      const labels = { idle: "Idle", connecting: "...", connected: "Connected", error: "Error" };
-      return (
-        <div style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: colors[state] + "20", color: colors[state], display: "flex", alignItems: "center", gap: 5 }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: colors[state], animation: state === "connecting" ? "pulse 1s infinite" : "none" }} />
-          {labels[state]}
-          <style>{`@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.3 } }`}</style>
-        </div>
-      );
-    }
+  // Initialize Ace Editor
+  useEffect(()=>{
+    if(content===null||!containerRef.current)return;
+    let editor=editorRef.current;
 
-    function MiniBtn({ children, onClick, danger }) {
-      return (
-        <div onClick={onClick} style={{ width: 28, height: 28, borderRadius: 6, background: danger ? "#f4474715" : "#ffffff08", color: danger ? "#f44747" : "#999", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 13 }}>
-          {children}
-        </div>
-      );
-    }
-
-    function ControlBar({ wsRef, termRef }) {
-      const [ctrlActive, setCtrlActive] = useState(false);
-      const sendInput = (data) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN)
-          wsRef.current.send(JSON.stringify({ type: "input", data }));
-      };
-      const sendCtrl = (key) => {
-        sendInput(String.fromCharCode(key.toUpperCase().charCodeAt(0) - 64));
-        setCtrlActive(false);
-      };
-      const handlePaste = async () => {
-        try { const t = await navigator.clipboard.readText(); if (t) sendInput(t); }
-        catch { const t = prompt("Paste text:"); if (t) sendInput(t); }
-      };
-      const handleCopy = () => {
-        const sel = termRef.current?.getSelection();
-        if (sel) try { navigator.clipboard.writeText(sel); } catch {}
-      };
-      const b = (active) => ({
-        padding: "6px 10px", borderRadius: 6, border: "none",
-        background: active ? theme.button : "#ffffff12", color: active ? theme.buttonText : "#ccc",
-        fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Fira Code', monospace",
-        minWidth: 36, textAlign: "center", whiteSpace: "nowrap",
-      });
-      return (
-        <div style={{ background: "#111", borderTop: "1px solid #ffffff0a", padding: "6px 8px", display: "flex", gap: 4, overflowX: "auto", flexShrink: 0 }}>
-          <button style={b(ctrlActive)} onClick={() => setCtrlActive(!ctrlActive)}>Ctrl</button>
-          {ctrlActive ? (
-            <>{["C","D","Z","L","A","R","W"].map(k => <button key={k} style={b(false)} onClick={() => sendCtrl(k)}>{k}</button>)}</>
-          ) : (
-            <>
-              <button style={b(false)} onClick={handlePaste}>Paste</button>
-              <button style={b(false)} onClick={handleCopy}>Copy</button>
-              <button style={b(false)} onClick={() => sendInput("\t")}>Tab</button>
-              <button style={b(false)} onClick={() => sendInput("\x1b")}>Esc</button>
-              <button style={b(false)} onClick={() => sendInput("\x1b[A")}>↑</button>
-              <button style={b(false)} onClick={() => sendInput("\x1b[B")}>↓</button>
-              <button style={b(false)} onClick={() => sendInput("\x1b[D")}>←</button>
-              <button style={b(false)} onClick={() => sendInput("\x1b[C")}>→</button>
-              <button style={b(false)} onClick={() => sendInput("/")}>⁄</button>
-              <button style={b(false)} onClick={() => sendInput("|")}>|</button>
-              <button style={b(false)} onClick={() => sendInput("-")}>-</button>
-              <button style={b(false)} onClick={() => sendInput("~")}>~</button>
-            </>
-          )}
-        </div>
-      );
-    }
-
-    function ServerForm({ initial, onSave, onCancel, onQuickConnect }) {
-      const [label, setLabel] = useState(initial?.label || "");
-      const [host, setHost] = useState(initial?.host || "");
-      const [port, setPort] = useState(initial?.port?.toString() || "22");
-      const [username, setUsername] = useState(initial?.username || "root");
-      const [authType, setAuthType] = useState(initial?.authType || "password");
-      const [password, setPassword] = useState(initial?.password || "");
-      const [privateKey, setPrivateKey] = useState(initial?.privateKey || "");
-      const [passphrase, setPassphrase] = useState(initial?.passphrase || "");
-      const isValid = host && username && (authType === "password" ? password : privateKey);
-      const getData = () => ({ label, host, port: parseInt(port) || 22, username, authType, password, privateKey, passphrase });
-      const i = { width: "100%", padding: "10px 12px", background: theme.secondaryBg, border: "1px solid #ffffff12", borderRadius: 8, color: theme.text, fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit", direction: "ltr", textAlign: "left" };
-      const l = { display: "block", fontSize: 12, color: theme.hint, marginBottom: 5, fontWeight: 500 };
-      return (
-        <div style={{ padding: "20px 16px", overflowY: "auto", height: "100vh", background: theme.bg, color: theme.text }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
-            <div onClick={onCancel} style={{ width: 28, height: 28, borderRadius: 6, background: "#ffffff10", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 14 }}>←</div>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>{initial ? "Edit Server" : "Add Server"}</h2>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div><label style={l}>Label (optional)</label><input style={i} value={label} onChange={e => setLabel(e.target.value)} placeholder="My Server" /></div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <div style={{ flex: 1 }}><label style={l}>Host</label><input style={i} value={host} onChange={e => setHost(e.target.value)} placeholder="1.2.3.4" /></div>
-              <div style={{ width: 80 }}><label style={l}>Port</label><input style={i} value={port} onChange={e => setPort(e.target.value)} placeholder="22" /></div>
-            </div>
-            <div><label style={l}>Username</label><input style={i} value={username} onChange={e => setUsername(e.target.value)} placeholder="root" /></div>
-            <div>
-              <label style={l}>Authentication</label>
-              <div style={{ display: "flex", gap: 6 }}>
-                {["password", "key"].map(t => (
-                  <div key={t} onClick={() => setAuthType(t)} style={{ flex: 1, padding: "8px", textAlign: "center", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", background: authType === t ? theme.button : "#ffffff08", color: authType === t ? theme.buttonText : theme.hint }}>
-                    {t === "password" ? "🔒 Password" : "🔑 SSH Key"}
-                  </div>
-                ))}
-              </div>
-            </div>
-            {authType === "password" ? (
-              <div><label style={l}>Password</label><input style={i} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" /></div>
-            ) : (
-              <>
-                <div><label style={l}>Private Key</label><textarea style={{ ...i, minHeight: 100, resize: "vertical", fontFamily: "'Fira Code', monospace", fontSize: 11 }} value={privateKey} onChange={e => setPrivateKey(e.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /></div>
-                <div><label style={l}>Passphrase (optional)</label><input style={i} type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="••••••••" /></div>
-              </>
-            )}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 24, paddingBottom: 40 }}>
-            <button onClick={() => isValid && onSave(getData())} disabled={!isValid} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: isValid ? theme.button : "#ffffff10", color: isValid ? theme.buttonText : theme.hint, fontSize: 15, fontWeight: 600, cursor: isValid ? "pointer" : "default" }}>Save</button>
-            <button onClick={() => isValid && onQuickConnect(getData())} disabled={!isValid} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "1px solid " + (isValid ? theme.button : "#ffffff10"), background: "transparent", color: isValid ? theme.button : theme.hint, fontSize: 15, fontWeight: 600, cursor: isValid ? "pointer" : "default" }}>Save & Connect</button>
-          </div>
-        </div>
-      );
-    }
-
-    function App() {
-      const [screen, setScreen] = useState("servers");
-      const [servers, setServers] = useState(loadServers);
-      const [editServer, setEditServer] = useState(null);
-      const [termState, setTermState] = useState("idle");
-      const [activeServer, setActiveServer] = useState(null);
-      const wsRef = useRef(null);
-      const termRef = useRef(null);
-      const termContainerRef = useRef(null);
-      const fitAddonRef = useRef(null);
-
-      useEffect(() => { tg?.expand?.(); tg?.ready?.(); }, []);
-      useEffect(() => { saveServersToStorage(servers); }, [servers]);
-
-      const loadXterm = useCallback(async () => {
-        if (window._xtermLoaded) return;
-        await loadCSS("https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css");
-        await loadScript("https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js");
-        await loadScript("https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js");
-        await loadScript("https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js");
-        window._xtermLoaded = true;
-      }, []);
-
-      const connectToServer = useCallback(async (server) => {
-        setActiveServer(server);
-        setScreen("terminal");
-        setTermState("connecting");
-        await loadXterm();
-        setTimeout(() => {
-          const container = termContainerRef.current;
-          if (!container) return;
-          container.innerHTML = "";
-          const term = new window.Terminal({
-            cursorBlink: true, fontSize: 14,
-            fontFamily: "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace",
-            theme: { background: "#0c0c0c", foreground: "#d4d4d4", cursor: "#3b82f6", selectionBackground: "#3b82f640" },
-            scrollback: 5000,
-          });
-          const fitAddon = new window.FitAddon.FitAddon();
-          term.loadAddon(fitAddon);
-          if (window.WebLinksAddon) term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
-          term.open(container);
-          fitAddon.fit();
-          termRef.current = term;
-          fitAddonRef.current = fitAddon;
-          term.writeln("\x1b[36m⟩ Connecting to " + server.host + "...\x1b[0m\r\n");
-          const ws = new WebSocket(WS_URL);
-          wsRef.current = ws;
-          ws.onopen = () => {
-            const payload = { host: server.host, port: parseInt(server.port) || 22, username: server.username, auth_type: server.authType };
-            payload.init_data = tg?.initData || "";
-            if (server.authType === "password") payload.password = server.password;
-            else { payload.private_key = server.privateKey; if (server.passphrase) payload.passphrase = server.passphrase; }
-            ws.send(JSON.stringify(payload));
-          };
-          ws.onmessage = (e) => {
-            try {
-              const msg = JSON.parse(e.data);
-              if (msg.type === "connected") { setTermState("connected"); term.writeln("\x1b[32m✓ Connected!\x1b[0m\r\n"); fitAddon.fit(); ws.send(JSON.stringify({ type: "resize", data: { cols: term.cols, rows: term.rows } })); }
-              else if (msg.type === "output") { term.write(msg.data); }
-              else if (msg.type === "error") { setTermState("error"); term.writeln("\r\n\x1b[31m✗ " + msg.data + "\x1b[0m"); }
-              else if (msg.type === "disconnected") { setTermState("idle"); term.writeln("\r\n\x1b[33m⟩ Disconnected\x1b[0m"); }
-            } catch {}
-          };
-          ws.onerror = () => { setTermState("error"); term.writeln("\r\n\x1b[31m✗ WebSocket error\x1b[0m"); };
-          ws.onclose = () => { setTermState("idle"); term.writeln("\r\n\x1b[33m⟩ Connection closed\x1b[0m"); };
-          term.onData((data) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data: data })); });
-          term.onResize(({ cols, rows }) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", data: { cols, rows } })); });
-          new ResizeObserver(() => { try { fitAddon.fit(); } catch {} }).observe(container);
-        }, 150);
-      }, [loadXterm]);
-
-      const disconnect = useCallback(() => {
-        try { wsRef.current?.send(JSON.stringify({ type: "disconnect" })); wsRef.current?.close(); } catch {}
-        try { termRef.current?.dispose(); } catch {}
-        setScreen("servers"); setTermState("idle");
-      }, []);
-
-      const saveServer = (srv) => {
-        if (editServer?.id) setServers(prev => prev.map(s => s.id === editServer.id ? { ...srv, id: s.id } : s));
-        else setServers(prev => [...prev, { ...srv, id: Date.now().toString() }]);
-        setEditServer(null); setScreen("servers");
-      };
-
-      if (screen === "terminal") {
-        return (
-          <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: theme.bg, color: theme.text }}>
-            <div style={{ padding: "10px 12px", background: theme.secondaryBg, borderBottom: "1px solid #ffffff0a", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-              <div onClick={disconnect} style={{ width: 28, height: 28, borderRadius: 6, background: "#ffffff10", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 14 }}>←</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{activeServer?.label || activeServer?.host}</div>
-                <div style={{ fontSize: 11, color: theme.hint }}>{activeServer?.username}@{activeServer?.host}</div>
-              </div>
-              <StatusBadge state={termState} />
-            </div>
-            <div ref={termContainerRef} style={{ flex: 1, background: "#0c0c0c", overflow: "hidden" }} />
-            <ControlBar wsRef={wsRef} termRef={termRef} />
-          </div>
-        );
+    const init=async()=>{
+      await loadAce();
+      if(editorRef.current){
+        editorRef.current.setValue(content,-1);
+        return;
       }
 
-      if (screen === "connect") {
-        return <ServerForm initial={editServer} onSave={saveServer} onCancel={() => setScreen("servers")}
-          onQuickConnect={(srv) => {
-            const n = { ...srv, id: editServer?.id || Date.now().toString() };
-            if (editServer?.id) setServers(prev => prev.map(s => s.id === editServer.id ? n : s));
-            else setServers(prev => [...prev, n]);
-            setEditServer(null);
-            setTimeout(() => connectToServer(n), 50);
-          }} />;
-      }
+      // Load the mode
+      try{await loadScript(ACE_CDN+"/mode-"+mode+".min.js")}catch{}
+      try{await loadScript(ACE_CDN+"/theme-"+editorTheme+".min.js")}catch{}
+      // Load worker for linting
+      try{
+        if(["javascript","json","css","html","xml","php","yaml"].includes(mode)){
+          await loadScript(ACE_CDN+"/worker-"+mode+".min.js");
+        }
+      }catch{}
 
-      return (
-        <div style={{ minHeight: "100vh", background: theme.bg, color: theme.text }}>
-          <div style={{ padding: "20px 16px 16px", background: "linear-gradient(135deg, " + theme.secondaryBg + ", " + theme.bg + ")", borderBottom: "1px solid #ffffff0a" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-              <span style={{ fontSize: 20 }}>⬡</span>
-              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em" }}>Eazy SSH</h1>
-            </div>
-            <p style={{ margin: "6px 0 0", color: theme.hint, fontSize: 13 }}>{servers.length} server{servers.length !== 1 ? "s" : ""}</p>
-          </div>
-          <div style={{ padding: "12px 16px" }}>
-            {servers.length === 0 && (
-              <div style={{ textAlign: "center", padding: "48px 20px", color: theme.hint }}>
-                <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>⬡</div>
-                <p style={{ fontSize: 15, margin: 0 }}>No servers yet</p>
-                <p style={{ fontSize: 13, margin: "4px 0 0", opacity: 0.6 }}>Tap + to add your first server</p>
-              </div>
-            )}
-            {servers.map(srv => (
-              <div key={srv.id} style={{ background: theme.secondaryBg, borderRadius: 12, padding: "14px 16px", marginBottom: 8, border: "1px solid #ffffff08", display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#6a9955", flexShrink: 0, boxShadow: "0 0 6px #6a995580" }} />
-                <div style={{ flex: 1, cursor: "pointer", minWidth: 0 }} onClick={() => connectToServer(srv)}>
-                  <div style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{srv.label || srv.host}</div>
-                  <div style={{ fontSize: 12, color: theme.hint, marginTop: 2 }}>{srv.username}@{srv.host}:{srv.port || 22}<span style={{ marginLeft: 8, opacity: 0.6 }}>{srv.authType === "key" ? "🔑" : "🔒"}</span></div>
-                </div>
-                <div style={{ display: "flex", gap: 4 }}>
-                  <MiniBtn onClick={() => { setEditServer(srv); setScreen("connect"); }}>✎</MiniBtn>
-                  <MiniBtn onClick={() => setServers(p => p.filter(s => s.id !== srv.id))} danger>✕</MiniBtn>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div onClick={() => { setEditServer(null); setScreen("connect"); }} style={{ position: "fixed", bottom: 24, right: 20, width: 52, height: 52, borderRadius: "50%", background: theme.button, color: theme.buttonText, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, fontWeight: 300, cursor: "pointer", boxShadow: "0 4px 20px " + theme.button + "60" }}>+</div>
+      editor=ace.edit(containerRef.current,{
+        mode:"ace/mode/"+mode,
+        theme:"ace/theme/"+editorTheme,
+        value:content,
+        fontSize:14,
+        fontFamily:"'Fira Code','JetBrains Mono','Cascadia Code','SF Mono',monospace",
+        showPrintMargin:false,
+        showGutter:true,
+        highlightActiveLine:true,
+        highlightSelectedWord:true,
+        enableBasicAutocompletion:true,
+        enableLiveAutocompletion:true,
+        enableSnippets:false,
+        tabSize:2,
+        useSoftTabs:true,
+        wrap:wordWrap,
+        scrollPastEnd:0.3,
+        displayIndentGuides:true,
+        showInvisibles:false,
+        animatedScroll:true,
+        cursorStyle:"smooth",
+        mergeUndoDeltas:true,
+        behavioursEnabled:true,
+        autoScrollEditorIntoView:true,
+      });
+
+      editor.commands.addCommand({
+        name:"save",
+        bindKey:{win:"Ctrl-S",mac:"Cmd-S"},
+        exec:()=>handleSave(editor),
+      });
+
+      editor.commands.addCommand({
+        name:"find",
+        bindKey:{win:"Ctrl-F",mac:"Cmd-F"},
+        exec:()=>editor.execCommand("find"),
+      });
+
+      editor.session.on("changeAnnotation",()=>{
+        const annots=editor.session.getAnnotations();
+        const errors=annots.filter(a=>a.type==="error").length;
+        const warnings=annots.filter(a=>a.type==="warning").length;
+        setEditorInfo(prev=>({...prev,errors,warnings}));
+      });
+
+      editor.selection.on("changeCursor",()=>{
+        const pos=editor.getCursorPosition();
+        setEditorInfo(prev=>({...prev,line:pos.row+1,col:pos.column+1}));
+      });
+
+      editor.session.on("change",()=>{
+        const lines=editor.session.getLength();
+        setEditorInfo(prev=>({...prev,lines}));
+        const current=editor.getValue();
+        setModified(current!==originalContent.current);
+      });
+
+      setEditorInfo({line:1,col:1,lines:editor.session.getLength(),errors:0,warnings:0});
+      editorRef.current=editor;
+      editor.focus();
+    };
+
+    init();
+
+    return()=>{
+      if(editorRef.current){
+        editorRef.current.destroy();
+        editorRef.current=null;
+      }
+    };
+  },[content!==null]);
+
+  // Update theme
+  useEffect(()=>{
+    if(!editorRef.current)return;
+    const applyTheme=async()=>{
+      try{await loadScript(ACE_CDN+"/theme-"+editorTheme+".min.js")}catch{}
+      editorRef.current.setTheme("ace/theme/"+editorTheme);
+      saveEditorTheme(editorTheme);
+    };
+    applyTheme();
+  },[editorTheme]);
+
+  // Update word wrap
+  useEffect(()=>{
+    if(editorRef.current)editorRef.current.session.setUseWrapMode(wordWrap);
+  },[wordWrap]);
+
+  const handleSave=(ed)=>{
+    const editor=ed||editorRef.current;
+    if(!editor)return;
+    const ws=wsRef.current;
+    if(!ws||ws.readyState!==WebSocket.OPEN)return;
+
+    setSaving(true);
+    setSaveMsg("");
+    const text=editor.getValue();
+    // Encode to base64
+    const bytes=new TextEncoder().encode(text);
+    let binary="";
+    bytes.forEach(b=>binary+=String.fromCharCode(b));
+    const b64=btoa(binary);
+
+    const dir=filePath.split("/").slice(0,-1).join("/");
+    const name=filePath.split("/").pop();
+    ws.send(JSON.stringify({action:"upload",path:dir,name,data:b64}));
+  };
+
+  const handleClose=()=>{
+    if(modified){
+      if(!confirm(lang==="fa"?"تغییرات ذخیره نشده! خارج شوید؟":"Unsaved changes! Close anyway?"))return;
+    }
+    onClose();
+  };
+
+  return<div dir="ltr" style={{height:"100vh",display:"flex",flexDirection:"column",background:"#1a1a1a",color:th.text}}>
+    {/* Header */}
+    <div style={{padding:"8px 10px",background:"#111",borderBottom:"1px solid #ffffff10",display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+      <div onClick={handleClose} style={{width:28,height:28,borderRadius:6,background:"#ffffff10",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:14}}>←</div>
+      <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:6}}>
+        <span style={{fontSize:14}}>{fileIcon(fileName,false)}</span>
+        <span style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fileName.split("/").pop()}</span>
+        {modified&&<span style={{fontSize:10,padding:"1px 6px",borderRadius:10,background:"#d7ba7d20",color:"#d7ba7d",fontWeight:600}}>●</span>}
+      </div>
+      <span style={{fontSize:10,color:th.hint,fontFamily:"monospace",whiteSpace:"nowrap"}}>{mode}</span>
+    </div>
+
+    {/* Toolbar */}
+    <div className="hide-scroll" style={{padding:"4px 8px",background:"#151515",borderBottom:"1px solid #ffffff08",display:"flex",gap:4,overflowX:"auto",flexShrink:0,alignItems:"center"}}>
+      <button className={"editor-toolbar-btn"+(modified?" primary":"")} onClick={()=>handleSave()} disabled={saving}>
+        {saving?"⏳":"💾"} {saving?t.saving:t.save}
+      </button>
+      <button className="editor-toolbar-btn" onClick={()=>editorRef.current?.undo()}>↩ {t.undo}</button>
+      <button className="editor-toolbar-btn" onClick={()=>editorRef.current?.redo()}>↪ {t.redo}</button>
+      <button className="editor-toolbar-btn" onClick={()=>editorRef.current?.execCommand("find")}>🔍</button>
+      <button className={"editor-toolbar-btn"+(wordWrap?" primary":"")} onClick={()=>setWordWrap(!wordWrap)}>↩ {t.wordWrap}</button>
+      <div style={{width:1,height:20,background:"#ffffff15",flexShrink:0}}/>
+      <select value={editorTheme} onChange={e=>setEditorTheme(e.target.value)} style={{padding:"4px 6px",borderRadius:4,background:"#ffffff0c",color:"#ccc",border:"1px solid #ffffff15",fontSize:11,cursor:"pointer"}}>
+        {EDITOR_THEMES.map(t=><option key={t} value={t}>{t.replace(/_/g," ")}</option>)}
+      </select>
+    </div>
+
+    {/* Editor */}
+    {loading?
+      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:th.hint}}>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:10,animation:"pulse 1s infinite"}}>📝</div>
+          <div>{t.loading}</div>
         </div>
-      );
+      </div>
+    :
+      <div ref={containerRef} style={{flex:1,width:"100%"}}/>
     }
 
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
-  </script>
+    {/* Status Bar */}
+    <div style={{padding:"3px 10px",background:"#111",borderTop:"1px solid #ffffff10",display:"flex",alignItems:"center",gap:8,flexShrink:0,fontSize:11,color:th.hint,fontFamily:"monospace"}}>
+      <span>Ln {editorInfo.line}, Col {editorInfo.col}</span>
+      <span>·</span>
+      <span>{editorInfo.lines} lines</span>
+      {editorInfo.errors>0&&<span style={{color:"#f44747"}}>✕ {editorInfo.errors} error{editorInfo.errors>1?"s":""}</span>}
+      {editorInfo.warnings>0&&<span style={{color:"#d7ba7d"}}>⚠ {editorInfo.warnings} warning{editorInfo.warnings>1?"s":""}</span>}
+      <div style={{flex:1}}/>
+      {saveMsg&&<span style={{color:saveMsg.startsWith("✅")?"#6a9955":"#f44747"}}>{saveMsg}</span>}
+      {modified&&!saveMsg&&<span style={{color:"#d7ba7d"}}>● {t.modified}</span>}
+    </div>
+  </div>;
+}
+
+// ─── SFTP File Manager ───
+function SFTPManager({server,onClose,t,lang}){
+  const[files,setFiles]=useState([]);const[path,setPath]=useState("~");const[loading,setLoading]=useState(true);
+  const[connected,setConnected]=useState(false);const[error,setError]=useState("");const[confirmDel,setConfirmDel]=useState(null);
+  const[editingFile,setEditingFile]=useState(null);
+  const wsRef=useRef(null);const fileInputRef=useRef(null);const rtl=lang==="fa";
+
+  useEffect(()=>{
+    const ws=new WebSocket(SFTP_URL);wsRef.current=ws;
+    ws.onopen=()=>{const p={host:server.host,port:parseInt(server.port)||22,username:server.username,auth_type:server.authType,init_data:tg?.initData||""};if(server.authType==="password")p.password=server.password;else{p.private_key=server.privateKey;if(server.passphrase)p.passphrase=server.passphrase}ws.send(JSON.stringify(p))};
+    ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==="connected"){setConnected(true);ws.send(JSON.stringify({action:"list",path:"~"}))}else if(m.type==="list"){setPath(m.path);setFiles(m.data||[]);setLoading(false)}else if(m.type==="download"){/* handled by FileEditor or HTTP */}else if(m.type==="upload_ok"||m.type==="delete_ok"||m.type==="mkdir_ok"||m.type==="rename_ok"){ws.send(JSON.stringify({action:"list",path}))}else if(m.type==="error"){setError(m.data);setLoading(false)}}catch{}};
+    ws.onerror=()=>setError("Connection failed");ws.onclose=()=>setConnected(false);
+    return()=>{try{ws.close()}catch{}};
+  },[server]);
+
+  const sendCmd=(action,extra={})=>{if(wsRef.current?.readyState===WebSocket.OPEN)wsRef.current.send(JSON.stringify({action,...extra}))};
+  const navigate=dir=>{setLoading(true);sendCmd("list",{path:dir})};
+  const goUp=()=>{const parent=path.split("/").slice(0,-1).join("/")||"/";navigate(parent)};
+  const handleUpload=e=>{const file=e.target.files[0];if(!file)return;if(file.size>50*1024*1024){setError("Max 50MB");return}const reader=new FileReader();reader.onload=()=>{const b64=reader.result.split(",")[1];sendCmd("upload",{path,name:file.name,data:b64})};reader.readAsDataURL(file);e.target.value=""};
+  const handleDelete=fp=>{sendCmd("delete",{path:fp});setConfirmDel(null)};
+  const handleMkdir=()=>{const name=prompt(rtl?"نام پوشه:":"Folder name:");if(name)sendCmd("mkdir",{path:path+"/"+name})};
+  const handleRename=op=>{const old=op.split("/").pop();const nn=prompt(rtl?"نام جدید:":"New name:",old);if(nn&&nn!==old){const parent=op.split("/").slice(0,-1).join("/");sendCmd("rename",{path:op,dest:parent+"/"+nn})}};
+  const handleDownload=fp=>{
+    setError("");const chatId=tg?.initDataUnsafe?.user?.id;if(!chatId){setError("Cannot get Telegram user ID");return}
+    const payload={host:server.host,port:parseInt(server.port)||22,username:server.username,auth_type:server.authType,init_data:tg?.initData||"",path:fp,chat_id:chatId};
+    if(server.authType==="password")payload.password=server.password;else{payload.private_key=server.privateKey;if(server.passphrase)payload.passphrase=server.passphrase}
+    setError(lang==="fa"?"در حال ارسال به تلگرام...":"Sending to Telegram...");
+    fetch(WS_BASE.replace("wss://","https://")+"/sftp-download",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
+      .then(r=>r.json()).then(d=>{if(d.error)setError(d.error);else setError(lang==="fa"?"✅ فایل در چت بات ارسال شد":"✅ File sent to bot chat");setTimeout(()=>setError(""),3000)}).catch(e=>setError("Failed: "+e.message));
+  };
+
+  const handleEdit=(fp,fileSize)=>{
+    if(fileSize>2*1024*1024){setError(t.fileTooLarge);setTimeout(()=>setError(""),3000);return;}
+    setEditingFile(fp);
+  };
+
+  // If editing, show FileEditor
+  if(editingFile){
+    return<FileEditor
+      filePath={editingFile}
+      fileName={editingFile}
+      server={server}
+      wsRef={wsRef}
+      onClose={()=>{setEditingFile(null);sendCmd("list",{path})}}
+      t={t}
+      lang={lang}
+    />;
+  }
+
+  const sorted=[...files].sort((a,b)=>{if(a.is_dir&&!b.is_dir)return-1;if(!a.is_dir&&b.is_dir)return 1;return a.name.localeCompare(b.name)});
+  const toolBtn=(label,onClick,icon)=><div onClick={onClick} style={{padding:"6px 10px",borderRadius:6,background:"#ffffff08",color:th.text,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}><span>{icon}</span><span>{label}</span></div>;
+
+  return<div dir={rtl?"rtl":"ltr"} style={{height:"100vh",display:"flex",flexDirection:"column",background:th.bg,color:th.text}}>
+    <div style={{padding:"10px 12px",background:th.secondaryBg,borderBottom:"1px solid #ffffff0a",display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+      <div onClick={onClose} style={{width:28,height:28,borderRadius:6,background:"#ffffff10",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:14}}>{rtl?"→":"←"}</div>
+      <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600}}>📂 {t.sftp}</div><div style={{fontSize:11,color:th.hint}}>{server.username}@{server.host}</div></div>
+      <StatusBadge state={connected?"connected":"connecting"} t={t}/>
+    </div>
+    <div style={{padding:"8px 12px",background:"#ffffff04",borderBottom:"1px solid #ffffff08",display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+      <div onClick={goUp} style={{width:28,height:28,borderRadius:6,background:"#ffffff08",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:12}}>⬆</div>
+      <div style={{flex:1,fontSize:12,color:th.hint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",direction:"ltr",fontFamily:"monospace"}}>{path}</div>
+    </div>
+    <div className="hide-scroll" style={{padding:"6px 12px",display:"flex",gap:6,overflowX:"auto",flexShrink:0,borderBottom:"1px solid #ffffff08"}}>{toolBtn(t.upload,()=>fileInputRef.current?.click(),"📤")}{toolBtn(t.newFolder,handleMkdir,"📁")}<input ref={fileInputRef} type="file" style={{display:"none"}} onChange={handleUpload}/></div>
+    <div style={{flex:1,overflowY:"auto",padding:"8px 12px"}}>
+      {loading&&<div style={{textAlign:"center",padding:40,color:th.hint}}>{t.loading}</div>}
+      {!loading&&sorted.length===0&&<div style={{textAlign:"center",padding:40,color:th.hint}}>{t.empty}</div>}
+      {!loading&&error&&<div style={{textAlign:"center",padding:10,color:error.startsWith("✅")?"#6a9955":"#f44747",fontSize:13}}>{error}</div>}
+      {!loading&&sorted.map(f=>{const fp=path+"/"+f.name;
+      return<div key={f.name} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 8px",borderBottom:"1px solid #ffffff06",cursor:"pointer"}} onClick={()=>{if(f.is_dir)navigate(fp);else handleEdit(fp,f.size)}}>
+        <span style={{fontSize:18,flexShrink:0}}>{fileIcon(f.name,f.is_dir)}</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:14,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</div>
+          <div style={{fontSize:11,color:th.hint,marginTop:2}}>
+            {f.is_dir?"—":humanSize(f.size)} · {f.mod_time}
+            <span style={{marginLeft:8,opacity:.5,fontFamily:"monospace",fontSize:10}}>{f.perms}</span>
+          </div>
+        </div>
+        {confirmDel===fp?<div style={{display:"flex",gap:4}}><div onClick={e=>{e.stopPropagation();handleDelete(fp)}} style={{padding:"4px 8px",borderRadius:4,background:"#f44747",color:"#fff",fontSize:11,cursor:"pointer"}}>{t.delete}</div><div onClick={e=>{e.stopPropagation();setConfirmDel(null)}} style={{padding:"4px 8px",borderRadius:4,background:"#ffffff10",color:th.hint,fontSize:11,cursor:"pointer"}}>✕</div></div>
+        :<div style={{display:"flex",gap:2}} onClick={e=>e.stopPropagation()}>
+          {!f.is_dir&&<MiniBtn onClick={()=>handleEdit(fp,f.size)} active title={t.edit}>📝</MiniBtn>}
+          {!f.is_dir&&<MiniBtn onClick={()=>handleDownload(fp)} title={t.download}>⬇</MiniBtn>}
+          <MiniBtn onClick={()=>handleRename(fp)} title={t.rename}>✏️</MiniBtn>
+          <MiniBtn onClick={()=>setConfirmDel(fp)} danger title={t.delete}>✕</MiniBtn>
+        </div>}
+      </div>})}
+    </div>
+  </div>;
+}
+
+// ─── Server Form (with tags + folder) ───
+function ServerForm({initial,onSave,onCancel,onSaveConnect,t,lang,folders}){
+  const[label,setLabel]=useState(initial?.label||"");const[host,setHost]=useState(initial?.host||"");
+  const[port,setPort]=useState(initial?.port?.toString()||"22");const[username,setUsername]=useState(initial?.username||"root");
+  const[authType,setAuthType]=useState(initial?.authType||"password");const[password,setPassword]=useState(initial?.password||"");
+  const[privateKey,setPrivateKey]=useState(initial?.privateKey||"");const[passphrase,setPassphrase]=useState(initial?.passphrase||"");
+  const[tags,setTags]=useState(initial?.tags||[]);const[folder,setFolder]=useState(initial?.folder||"");
+  const[tagInput,setTagInput]=useState("");
+  const rtl=lang==="fa";const isValid=host&&username&&(authType==="password"?password:privateKey);
+  const getData=()=>({label,host,port:parseInt(port)||22,username,authType,password,privateKey,passphrase,tags,folder});
+  const addTag=()=>{const tg=tagInput.trim();if(tg&&!tags.includes(tg)){setTags([...tags,tg]);setTagInput("")}};
+  const is={width:"100%",padding:"10px 12px",background:th.secondaryBg,border:"1px solid #ffffff12",borderRadius:8,color:th.text,fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit",direction:"ltr",textAlign:"left"};
+  const ls={display:"block",fontSize:12,color:th.hint,marginBottom:5,fontWeight:500,textAlign:rtl?"right":"left"};
+
+  return<div dir={rtl?"rtl":"ltr"} style={{padding:"20px 16px",overflowY:"auto",height:"100vh",background:th.bg,color:th.text}}>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+      <div onClick={onCancel} style={{width:28,height:28,borderRadius:6,background:"#ffffff10",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:14}}>{rtl?"→":"←"}</div>
+      <h2 style={{margin:0,fontSize:18,fontWeight:700}}>{initial?t.editServer:t.addServer}</h2>
+    </div>
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div><label style={ls}>{t.label}</label><input style={is} value={label} onChange={e=>setLabel(e.target.value)} placeholder={rtl?"سرور من":"My Server"}/></div>
+      <div style={{display:"flex",gap:10}}><div style={{flex:1}}><label style={ls}>{t.host}</label><input style={is} value={host} onChange={e=>setHost(e.target.value)} placeholder="1.2.3.4"/></div><div style={{width:80}}><label style={ls}>{t.port}</label><input style={is} value={port} onChange={e=>setPort(e.target.value)} placeholder="22"/></div></div>
+      <div><label style={ls}>{t.username}</label><input style={is} value={username} onChange={e=>setUsername(e.target.value)} placeholder="root"/></div>
+      <div><label style={ls}>{t.auth}</label><div style={{display:"flex",gap:6}}>{["password","key"].map(tp=><div key={tp} onClick={()=>setAuthType(tp)} style={{flex:1,padding:"8px",textAlign:"center",borderRadius:8,fontSize:13,fontWeight:500,cursor:"pointer",background:authType===tp?th.button:"#ffffff08",color:authType===tp?th.buttonText:th.hint}}>{tp==="password"?t.passwordAuth:t.keyAuth}</div>)}</div></div>
+      {authType==="password"?<div><label style={ls}>{t.password}</label><input style={is} type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/></div>
+      :<><div><label style={ls}>{t.privateKey}</label><textarea style={{...is,minHeight:100,resize:"vertical",fontFamily:"'Fira Code',monospace",fontSize:11}} value={privateKey} onChange={e=>setPrivateKey(e.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"/></div><div><label style={ls}>{t.passphrase}</label><input style={is} type="password" value={passphrase} onChange={e=>setPassphrase(e.target.value)} placeholder="••••••••"/></div></>}
+      <div><label style={ls}>{t.folder}</label>
+        <select value={folder} onChange={e=>setFolder(e.target.value)} style={{...is,cursor:"pointer"}}>
+          <option value="">{t.noFolder}</option>
+          {folders.map(f=><option key={f} value={f}>{f}</option>)}
+        </select>
+      </div>
+      <div><label style={ls}>{t.tags}</label>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:6}}>{tags.map(tg=><TagPill key={tg} tag={tg} active onRemove={()=>setTags(tags.filter(x=>x!==tg))}/>)}</div>
+        <div style={{display:"flex",gap:6}}><input style={{...is,flex:1}} value={tagInput} onChange={e=>setTagInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addTag()} placeholder={rtl?"تگ جدید...":"New tag..."}/><div onClick={addTag} style={{padding:"10px 14px",borderRadius:8,background:th.button,color:th.buttonText,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>{t.addTag}</div></div>
+      </div>
+    </div>
+    <div style={{display:"flex",gap:8,marginTop:24,paddingBottom:40}}>
+      <button onClick={()=>isValid&&onSave(getData())} disabled={!isValid} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:isValid?"#ffffff15":"#ffffff08",color:isValid?th.text:th.hint,fontSize:15,fontWeight:600,cursor:isValid?"pointer":"default"}}>{t.save}</button>
+      <button onClick={()=>isValid&&onSaveConnect(getData())} disabled={!isValid} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:isValid?th.button:"#ffffff10",color:isValid?th.buttonText:th.hint,fontSize:15,fontWeight:600,cursor:isValid?"pointer":"default"}}>{t.saveConnect}</button>
+    </div>
+  </div>;
+}
+
+// ─── Settings Panel ───
+function SettingsPanel({onClose,t,lang,termTheme,setTermTheme,folders,setFolders}){
+  const rtl=lang==="fa";
+  const addFolder=()=>{const n=prompt(rtl?"نام پوشه:":"Folder name:");if(n&&!folders.includes(n))setFolders([...folders,n])};
+  return<div dir={rtl?"rtl":"ltr"} style={{padding:"20px 16px",overflowY:"auto",height:"100vh",background:th.bg,color:th.text}}>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+      <div onClick={onClose} style={{width:28,height:28,borderRadius:6,background:"#ffffff10",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:14}}>{rtl?"→":"←"}</div>
+      <h2 style={{margin:0,fontSize:18,fontWeight:700}}>⚙ {t.settings}</h2>
+    </div>
+    <div style={{marginBottom:24}}>
+      <div style={{fontSize:14,fontWeight:600,marginBottom:10}}>{t.termTheme}</div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {Object.entries(TERM_THEMES).map(([key,tm])=>(
+          <div key={key} onClick={()=>setTermTheme(key)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:8,cursor:"pointer",background:termTheme===key?th.button+"20":"#ffffff08",border:termTheme===key?"1px solid "+th.button+"50":"1px solid transparent"}}>
+            <div style={{width:40,height:28,borderRadius:4,background:tm.background,border:"1px solid #ffffff15",display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <span style={{color:tm.foreground,fontSize:10,fontFamily:"monospace"}}>A_</span>
+            </div>
+            <div><div style={{fontSize:13,fontWeight:500}}>{tm.name}</div>
+              <div style={{display:"flex",gap:3,marginTop:3}}>{[tm.red,tm.green,tm.yellow,tm.blue,tm.magenta,tm.cyan].map((c,i)=><div key={i} style={{width:10,height:10,borderRadius:"50%",background:c}}/>)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+    <div>
+      <div style={{fontSize:14,fontWeight:600,marginBottom:10}}>{t.manageFolders}</div>
+      {folders.length===0&&<div style={{color:th.hint,fontSize:13,marginBottom:8}}>{rtl?"هنوز پوشه‌ای نیست":"No folders yet"}</div>}
+      {folders.map(f=><div key={f} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:6,background:"#ffffff08",marginBottom:4}}>
+        <span style={{flex:1,fontSize:13}}>📁 {f}</span>
+        <MiniBtn onClick={()=>setFolders(folders.filter(x=>x!==f))} danger>✕</MiniBtn>
+      </div>)}
+      <div onClick={addFolder} style={{padding:"10px",borderRadius:8,border:"1px dashed #ffffff20",textAlign:"center",color:th.hint,fontSize:13,cursor:"pointer",marginTop:6}}>{t.addFolder}</div>
+    </div>
+  </div>;
+}
+
+// ─── Main App ───
+function App(){
+  const[screen,setScreen]=useState("servers");
+  const[servers,setServers]=useState(loadServers);const[editServer,setEditServer]=useState(null);
+  const[lang,setLang]=useState(loadLang);const[sftpServer,setSftpServer]=useState(null);const[menuOpen,setMenuOpen]=useState(null);
+  const[termTheme,setTermThemeState]=useState(loadTermTheme);
+  const[folders,setFoldersState]=useState(loadFolders);
+  const[filterFolder,setFilterFolder]=useState("");const[filterTag,setFilterTag]=useState("");
+  const t=LANGS[lang];const rtl=lang==="fa";
+
+  const setTermTheme=v=>{setTermThemeState(v);saveTermTheme(v);sessions.forEach(s=>{if(s.term){const tm=TERM_THEMES[v]||TERM_THEMES.dark;s.term.options.theme=tm}})};
+
+  const setFolders=v=>{setFoldersState(v);saveFolders(v)};
+
+  const[sessions,setSessions]=useState([]);const[activeSessionId,setActiveSessionId]=useState(null);
+  useEffect(()=>{tg?.expand?.();tg?.ready?.()},[]);
+  useEffect(()=>{saveServersToStorage(servers)},[servers]);
+  useEffect(()=>{saveLang(lang)},[lang]);
+  useEffect(()=>{if(menuOpen===null)return;const h=()=>setMenuOpen(null);setTimeout(()=>document.addEventListener("click",h),10);return()=>document.removeEventListener("click",h)},[menuOpen]);
+
+  const toggleLang=()=>setLang(l=>l==="en"?"fa":"en");
+  const loadXterm=useCallback(async()=>{if(window._xtermLoaded)return;await loadCSS("https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css");await loadScript("https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js");await loadScript("https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js");await loadScript("https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js");window._xtermLoaded=true},[]);
+
+  const connectToServer=useCallback(async server=>{
+    const sid=Date.now().toString();
+    setSessions(p=>[...p,{id:sid,serverId:server.id,host:server.host,label:server.label,username:server.username,state:"connecting",ws:null,term:null,fitAddon:null,containerEl:null}]);
+    setActiveSessionId(sid);setScreen("terminal");await loadXterm();
+    setTimeout(()=>{
+      const wrapper=document.getElementById("term-wrapper");if(!wrapper)return;
+      const cel=document.createElement("div");cel.style.cssText="width:100%;height:100%;";wrapper.innerHTML="";wrapper.appendChild(cel);
+      const tmTheme=TERM_THEMES[termTheme]||TERM_THEMES.dark;
+      const term=new window.Terminal({cursorBlink:true,fontSize:14,fontFamily:"'Fira Code','Cascadia Code','JetBrains Mono',monospace",theme:tmTheme,scrollback:5000});
+      const fa=new window.FitAddon.FitAddon();term.loadAddon(fa);if(window.WebLinksAddon)term.loadAddon(new window.WebLinksAddon.WebLinksAddon());term.open(cel);fa.fit();
+      term.writeln("\x1b[36m⟩ Connecting to "+server.host+"...\x1b[0m\r\n");
+      const ws=new WebSocket(WS_URL);
+      ws.onopen=()=>{const p={host:server.host,port:parseInt(server.port)||22,username:server.username,auth_type:server.authType,init_data:tg?.initData||""};if(server.authType==="password")p.password=server.password;else{p.private_key=server.privateKey;if(server.passphrase)p.passphrase=server.passphrase}ws.send(JSON.stringify(p))};
+      ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==="connected"){setSessions(p=>p.map(s=>s.id===sid?{...s,state:"connected"}:s));term.writeln("\x1b[32m✓ Connected!\x1b[0m\r\n");fa.fit();ws.send(JSON.stringify({type:"resize",data:{cols:term.cols,rows:term.rows}}))}else if(m.type==="output")term.write(m.data);else if(m.type==="error"){setSessions(p=>p.map(s=>s.id===sid?{...s,state:"error"}:s));term.writeln("\r\n\x1b[31m✗ "+m.data+"\x1b[0m")}else if(m.type==="disconnected"){setSessions(p=>p.map(s=>s.id===sid?{...s,state:"idle"}:s));term.writeln("\r\n\x1b[33m⟩ Disconnected\x1b[0m")}}catch{}};
+      ws.onerror=()=>{setSessions(p=>p.map(s=>s.id===sid?{...s,state:"error"}:s));term.writeln("\r\n\x1b[31m✗ WebSocket error\x1b[0m")};
+      ws.onclose=()=>{setSessions(p=>p.map(s=>s.id===sid?{...s,state:"idle"}:s));term.writeln("\r\n\x1b[33m⟩ Connection closed\x1b[0m")};
+      term.onData(d=>{if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:"input",data:d}))});
+      term.onResize(({cols,rows})=>{if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:"resize",data:{cols,rows}}))});
+      new ResizeObserver(()=>{try{fa.fit()}catch{}}).observe(cel);
+      setSessions(p=>p.map(s=>s.id===sid?{...s,ws,term,fitAddon:fa,containerEl:cel}:s));
+    },150);
+  },[loadXterm,termTheme]);
+
+  useEffect(()=>{const wrapper=document.getElementById("term-wrapper");if(screen!=="terminal"||!activeSessionId){if(wrapper)wrapper.innerHTML="";return}const timer=setTimeout(()=>{if(!wrapper)return;const s=sessions.find(s=>s.id===activeSessionId);if(!s?.containerEl)return;wrapper.innerHTML="";wrapper.appendChild(s.containerEl);try{s.fitAddon?.fit()}catch{}try{s.term?.focus()}catch{}},50);return()=>clearTimeout(timer)},[activeSessionId,screen,sessions]);
+
+  const closeSession=useCallback(id=>{setSessions(prev=>{const s=prev.find(x=>x.id===id);if(s){try{s.ws?.send(JSON.stringify({type:"disconnect"}));s.ws?.close()}catch{}try{s.term?.dispose()}catch{}try{s.containerEl?.remove()}catch{}}const rem=prev.filter(x=>x.id!==id);if(id===activeSessionId){if(rem.length>0)setActiveSessionId(rem[rem.length-1].id);else{setActiveSessionId(null);setScreen("servers")}}return rem})},[activeSessionId]);
+
+  const saveServer=srv=>{if(editServer?.id)setServers(p=>p.map(s=>s.id===editServer.id?{...srv,id:s.id}:s));else setServers(p=>[...p,{...srv,id:Date.now().toString()}]);setEditServer(null);setScreen("servers")};
+  const saveAndConnect=srv=>{const ns={...srv,id:editServer?.id||Date.now().toString()};if(editServer?.id)setServers(p=>p.map(s=>s.id===editServer.id?ns:s));else setServers(p=>[...p,ns]);setEditServer(null);setTimeout(()=>connectToServer(ns),50)};
+  const activeSession=sessions.find(s=>s.id===activeSessionId);
+
+  const allTags=[...new Set(servers.flatMap(s=>s.tags||[]))];
+
+  const filtered=servers.filter(srv=>{
+    if(filterFolder&&(srv.folder||"")!==filterFolder)return false;
+    if(filterTag&&!(srv.tags||[]).includes(filterTag))return false;
+    return true;
+  });
+
+  const groupedByFolder={};
+  if(!filterFolder){
+    filtered.forEach(srv=>{const f=srv.folder||"";if(!groupedByFolder[f])groupedByFolder[f]=[];groupedByFolder[f].push(srv)});
+  }else{
+    groupedByFolder[filterFolder]=filtered;
+  }
+
+  if(screen==="sftp"&&sftpServer)return<SFTPManager server={sftpServer} onClose={()=>{setSftpServer(null);setScreen("servers")}} t={t} lang={lang}/>;
+  if(screen==="settings")return<SettingsPanel onClose={()=>setScreen("servers")} t={t} lang={lang} termTheme={termTheme} setTermTheme={setTermTheme} folders={folders} setFolders={setFolders}/>;
+
+  if(screen==="terminal"){
+    return<div style={{height:"100vh",display:"flex",flexDirection:"column",background:th.bg,color:th.text}}>
+      <div style={{padding:"8px 12px",background:th.secondaryBg,borderBottom:"1px solid #ffffff0a",display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+        <div onClick={()=>{const w=document.getElementById("term-wrapper");if(w)w.innerHTML="";setScreen("servers")}} style={{width:28,height:28,borderRadius:6,background:"#ffffff10",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:14}}>←</div>
+        <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{activeSession?.label||activeSession?.host||"Terminal"}</div><div style={{fontSize:11,color:th.hint}}>{activeSession?activeSession.username+"@"+activeSession.host:""}</div></div>
+        {activeSession&&<StatusBadge state={activeSession.state} t={t}/>}
+      </div>
+      <SessionTabs sessions={sessions} activeId={activeSessionId} onSwitch={id=>setActiveSessionId(id)} onClose={closeSession}/>
+      <div id="term-wrapper" style={{flex:1,background:TERM_THEMES[termTheme]?.background||"#0c0c0c",overflow:"hidden"}}/>
+      {activeSession&&<ControlBar ws={activeSession.ws} term={activeSession.term}/>}
+    </div>;
+  }
+
+  if(screen==="connect")return<ServerForm initial={editServer} onSave={saveServer} onCancel={()=>setScreen("servers")} onSaveConnect={saveAndConnect} t={t} lang={lang} folders={folders}/>;
+
+  // ═══ SERVERS LIST ═══
+  return<div dir={rtl?"rtl":"ltr"} style={{minHeight:"100vh",background:th.bg,color:th.text,overflowY:"auto",height:"100vh"}}>
+
+    <div style={{padding:"20px 16px 16px",background:"linear-gradient(135deg,"+th.secondaryBg+","+th.bg+")",borderBottom:"1px solid #ffffff0a"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+        <span style={{fontSize:20}}>⬡</span>
+        <h1 style={{margin:0,fontSize:20,fontWeight:700,letterSpacing:"-0.02em",flex:1}}>{t.title}</h1>
+        <div onClick={()=>setScreen("settings")} style={{width:28,height:28,borderRadius:6,background:"#ffffff08",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:14}}>⚙</div>
+        <div onClick={toggleLang} style={{padding:"4px 10px",borderRadius:6,background:"#ffffff08",color:th.hint,fontSize:12,fontWeight:600,cursor:"pointer"}}>{t.langBtn}</div>
+      </div>
+      <p style={{margin:"6px 0 0",color:th.hint,fontSize:13}}>{servers.length} {t.servers}</p>
+    </div>
+
+    {(folders.length>0||allTags.length>0)&&<div className="hide-scroll" style={{padding:"8px 16px",display:"flex",gap:6,overflowX:"auto",borderBottom:"1px solid #ffffff08",flexShrink:0}}>
+      <TagPill tag={t.all} active={!filterFolder&&!filterTag} onClick={()=>{setFilterFolder("");setFilterTag("")}}/>
+      {folders.map(f=><TagPill key={"f_"+f} tag={"📁 "+f} active={filterFolder===f} onClick={()=>{setFilterFolder(filterFolder===f?"":f);setFilterTag("")}}/>)}
+      {allTags.map(tg=><TagPill key={"t_"+tg} tag={"🏷 "+tg} active={filterTag===tg} onClick={()=>{setFilterTag(filterTag===tg?"":tg);setFilterFolder("")}}/>)}
+    </div>}
+
+    {sessions.length>0&&<div style={{padding:"8px 16px",borderBottom:"1px solid #ffffff08"}}>
+      <div style={{fontSize:11,color:th.hint,marginBottom:6}}>{sessions.length} {t.sessions}</div>
+      <div className="hide-scroll" style={{display:"flex",gap:6,overflowX:"auto"}}>{sessions.map(s=><div key={s.id} onClick={()=>{setActiveSessionId(s.id);setScreen("terminal")}} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:8,background:"#ffffff08",cursor:"pointer",whiteSpace:"nowrap",fontSize:12,color:th.text}}><StatusDot state={s.state}/><span>{s.label||s.host}</span><span onClick={e=>{e.stopPropagation();closeSession(s.id)}} style={{marginLeft:4,opacity:.4,fontSize:10,cursor:"pointer"}}>✕</span></div>)}</div>
+    </div>}
+
+    <div style={{padding:"12px 16px"}}>
+      {filtered.length===0&&<div style={{textAlign:"center",padding:"48px 20px",color:th.hint}}><div style={{fontSize:40,marginBottom:12,opacity:.3}}>⬡</div><p style={{fontSize:15,margin:0}}>{t.noServers}</p><p style={{fontSize:13,margin:"4px 0 0",opacity:.6}}>{t.noServersTip}</p></div>}
+
+      {Object.entries(groupedByFolder).sort(([a],[b])=>a===""?1:b===""?-1:a.localeCompare(b)).map(([folder,srvs])=>(
+        <div key={folder}>
+          {!filterFolder&&Object.keys(groupedByFolder).length>1&&<div style={{fontSize:12,color:th.hint,fontWeight:600,padding:"8px 0 4px",display:"flex",alignItems:"center",gap:4}}>{folder?"📁 "+folder:t.noFolder}</div>}
+          {srvs.map(srv=>{
+            const live=sessions.some(s=>s.serverId===srv.id&&(s.state==="connected"||s.state==="connecting"));
+            const isMenuOpen=menuOpen===srv.id;
+            return<div key={srv.id} style={{background:th.secondaryBg,borderRadius:12,padding:"12px 14px",marginBottom:8,border:"1px solid #ffffff08",display:"flex",alignItems:"center",gap:12,position:"relative"}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:live?"#6a9955":"#7a7a7a",flexShrink:0,boxShadow:live?"0 0 6px #6a995580":"none"}}/>
+              <div style={{flex:1,cursor:"pointer",minWidth:0}} onClick={()=>connectToServer(srv)}>
+                <div style={{fontSize:15,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{srv.label||srv.host}</div>
+                <div style={{fontSize:12,color:th.hint,marginTop:2,direction:"ltr",textAlign:rtl?"right":"left"}}>{srv.username}@{srv.host}:{srv.port||22}<span style={{marginLeft:8,opacity:.6}}>{srv.authType==="key"?"🔑":"🔒"}</span></div>
+                {(srv.tags||[]).length>0&&<div style={{display:"flex",gap:3,marginTop:4,flexWrap:"wrap"}}>{srv.tags.map(tg=><span key={tg} style={{fontSize:10,padding:"1px 6px",borderRadius:10,background:th.button+"15",color:th.button}}>🏷 {tg}</span>)}</div>}
+              </div>
+              <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                <div onClick={e=>{e.stopPropagation();setMenuOpen(isMenuOpen?null:srv.id)}} style={{width:28,height:28,borderRadius:6,background:"#ffffff08",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:16,color:"#999",letterSpacing:2}}>⋮</div>
+                {isMenuOpen&&<div onClick={e=>e.stopPropagation()} style={{position:"absolute",[rtl?"left":"right"]:8,top:50,background:"#222",borderRadius:10,border:"1px solid #ffffff15",padding:4,zIndex:99,minWidth:140,boxShadow:"0 8px 30px rgba(0,0,0,.5)",maxHeight:300,overflowY:"auto"}}>
+  <div onClick={()=>{setMenuOpen(null);connectToServer(srv)}} style={{padding:"8px 12px",borderRadius:6,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,color:th.text}}><span>🖥</span>{t.ssh}</div>
+  <div onClick={()=>{setMenuOpen(null);setSftpServer(srv);setScreen("sftp")}} style={{padding:"8px 12px",borderRadius:6,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,color:th.text}}><span>📂</span>{t.sftp}</div>
+  <div style={{height:1,background:"#ffffff10",margin:"4px 0"}}/>
+  {folders.length>0&&<><div style={{padding:"4px 12px",fontSize:11,color:th.hint}}>{t.folder}</div>{folders.map(f=><div key={f} onClick={()=>{setMenuOpen(null);setServers(p=>p.map(s=>s.id===srv.id?{...s,folder:f}:s))}} style={{padding:"8px 12px",borderRadius:6,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,color:srv.folder===f?th.button:th.text,fontWeight:srv.folder===f?600:400}}><span>📁</span>{f}{srv.folder===f?" ✓":""}</div>)}<div onClick={()=>{setMenuOpen(null);setServers(p=>p.map(s=>s.id===srv.id?{...s,folder:""}:s))}} style={{padding:"8px 12px",borderRadius:6,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,color:!srv.folder?th.button:th.hint}}><span>📄</span>{t.noFolder}{!srv.folder?" ✓":""}</div><div style={{height:1,background:"#ffffff10",margin:"4px 0"}}/></>}
+  <div onClick={()=>{setMenuOpen(null);setEditServer(srv);setScreen("connect")}} style={{padding:"8px 12px",borderRadius:6,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,color:th.text}}><span>✎</span>{rtl?"ویرایش":"Edit"}</div>
+  <div onClick={()=>{setMenuOpen(null);setServers(p=>p.filter(s=>s.id!==srv.id))}} style={{padding:"8px 12px",borderRadius:6,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8,color:"#f44747"}}><span>✕</span>{t.deleteServer}</div>
+</div>}
+              </div>
+            </div>;
+          })}
+        </div>
+      ))}
+    </div>
+ <div style={{position:"fixed",bottom:4,left:0,right:0,textAlign:"center",color:th.hint,fontSize:11,opacity:.3,pointerEvents:"none"}}>
+  {rtl?"ساخته شده با ♡ توسط شمیتز":"Made with ♡ by Schmitz"}
+</div>
+    <div onClick={()=>{setEditServer(null);setScreen("connect")}} style={{position:"fixed",bottom:24,[rtl?"left":"right"]:20,width:52,height:52,borderRadius:"50%",background:th.button,color:th.buttonText,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,fontWeight:300,cursor:"pointer",boxShadow:"0 4px 20px "+th.button+"60"}}>+</div>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
 </body>
 </html>
