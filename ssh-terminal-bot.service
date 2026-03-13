@@ -1,8 +1,11 @@
 [Unit]
-Description=EazySSH Telegram Bot
+Description=SSH Terminal Telegram Bot
 After=network.target
 
 [Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ssh-terminal
 EnvironmentFile=/opt/ssh-terminal/.env
 ExecStart=/usr/bin/python3 /opt/ssh-terminal/bot.py
 Restart=always

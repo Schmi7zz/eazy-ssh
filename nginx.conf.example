@@ -1,24 +1,20 @@
-# Eazy SSH - Nginx Configuration
-# Replace YOUR_FRONTEND_DOMAIN and YOUR_API_DOMAIN with your actual domains
-
-# Frontend - Mini App
 server {
-    listen 80;
-    server_name YOUR_FRONTEND_DOMAIN;
-
+    server_name ssh-terminal.yourdomain.com;
     root /opt/ssh-terminal/frontend;
     index index.html;
-
+    add_header Cache-Control "no-cache, no-store, must-revalidate";
     location / {
         try_files $uri $uri/ /index.html;
     }
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/ssh-terminal.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ssh-terminal.yourdomain.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
 
-# Backend - WebSocket Proxy
 server {
-    listen 80;
-    server_name YOUR_API_DOMAIN;
-
+    server_name ssh-api.yourdomain.com;
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
@@ -26,7 +22,23 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
+        proxy_read_timeout 86400;
     }
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/ssh-terminal.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ssh-terminal.yourdomain.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+}
+
+server {
+    listen 80;
+    server_name ssh-terminal.yourdomain.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 80;
+    server_name ssh-api.yourdomain.com;
+    return 301 https://$host$request_uri;
 }

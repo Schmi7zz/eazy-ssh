@@ -7,4 +7,5 @@ services:
       - .env
     environment:
       - PORT=8080
+      - ALLOWED_ORIGIN=https://ssh-terminal.yourdomain.com
     restart: unless-stopped
