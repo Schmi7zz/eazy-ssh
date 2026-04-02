@@ -123,6 +123,7 @@ class SSHSession:
         self.update_task = None
         self.alive = False
         self.last_edit = 0
+        self._manual_disconnect = False
 
     async def connect(self):
         """Establish SSH connection."""
@@ -174,9 +175,10 @@ class SSHSession:
             pass
         finally:
             self.alive = False
-            # Final update
-            await self._flush_and_update()
-            await self._update_terminal_message(disconnected=True)
+            # Final update (skip if user manually disconnected)
+            if not self._manual_disconnect:
+                await self._flush_and_update()
+                await self._update_terminal_message(disconnected=True)
 
     async def _output_loop(self):
         """Periodically flush buffer and edit the terminal message."""
@@ -302,6 +304,7 @@ class SSHSession:
 
     async def disconnect(self):
         """Close the SSH session."""
+        self._manual_disconnect = True
         self.alive = False
         if self.update_task:
             self.update_task.cancel()
@@ -647,6 +650,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ─── Reconnect ───
+    if data.startswith("reconnect:"):
+        server_id = data.split(":", 1)[1]
+        # Fall through to connect logic below
+        data = f"srv:connect:{server_id}"
+
     # ─── Connect to server ───
     if data.startswith("srv:connect:"):
         server_id = data.split(":", 2)[2]
@@ -707,14 +716,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("🔙 Back", callback_data="menu:chat_terminal")],
                 ]),
             )
-        return
-
-    # ─── Reconnect ───
-    if data.startswith("reconnect:"):
-        server_id = data.split(":", 1)[1]
-        # Reuse connect logic
-        query.data = f"srv:connect:{server_id}"
-        await callback_handler(update, context)
         return
 
     # ─── Terminal actions ───
