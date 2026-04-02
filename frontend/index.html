@@ -4,6 +4,10 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
   <title>SSH Terminal</title>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin/>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin/>
+  <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com"/>
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net"/>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -25,13 +29,17 @@
     .editor-toolbar-btn.primary{background:#3b82f6;color:#fff}
     .editor-toolbar-btn.primary:active{background:#2563eb}
     .editor-modified{background:#d7ba7d!important;color:#000!important;font-weight:600}
+    #splash{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0f0f0f;z-index:9999;flex-direction:column;gap:16px}
+    #splash .sp{width:28px;height:28px;border:3px solid #333;border-top-color:#3b82f6;border-radius:50%;animation:sp .6s linear infinite}
+    @keyframes sp{to{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
+<div id="splash"><div class="sp"></div><div style="color:#555;font-size:12px">Loading...</div></div>
 <div id="root"></div>
 <script>
 (function(){var tw=window.Telegram&&window.Telegram.WebApp;var id=tw&&tw.initData;
-if(!id||id.length<10){document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#7a7a7a;font-family:system-ui;text-align:center;padding:20px;background:#0f0f0f"><div><h2 style="margin:0 0 8px;color:#e0e0e0">⛔ Access Denied</h2><p style="margin:0;font-size:14px">This app only works inside Telegram.<br><br><a href="https://t.me/YOUR_BOT/terminal" style="color:#3b82f6;text-decoration:none">➜ Open in Telegram</a></p></div></div>';throw new Error("blocked");}
+if(!id||id.length<10){document.getElementById("splash").remove();document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#7a7a7a;font-family:system-ui;text-align:center;padding:20px;background:#0f0f0f"><div><h2 style="margin:0 0 8px;color:#e0e0e0">⛔ Access Denied</h2><p style="margin:0;font-size:14px">This app only works inside Telegram.<br><br><a href="https://t.me/YOUR_BOT/terminal" style="color:#3b82f6;text-decoration:none">➜ Open in Telegram</a></p></div></div>';throw new Error("blocked");}
 })();
 </script>
 <script type="text/babel">
@@ -459,7 +467,7 @@ function SFTPManager({server,onClose,t,lang}){
   return<div dir={rtl?"rtl":"ltr"} style={{height:"100vh",display:"flex",flexDirection:"column",background:th.bg,color:th.text}}>
     <div style={{padding:"10px 12px",background:th.secondaryBg,borderBottom:"1px solid #ffffff0a",display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
       <div onClick={onClose} style={{width:28,height:28,borderRadius:6,background:"#ffffff10",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:14}}>{rtl?"→":"←"}</div>
-      <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600}}>📂 {t.sftp}</div><div style={{fontSize:11,color:th.hint}}>{server.username}@{server.host}</div></div>
+      <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600}}>📂 {t.sftp} <span style={{fontSize:9,opacity:.4}}>v3</span></div><div style={{fontSize:11,color:th.hint}}>{server.username}@{server.host}</div></div>
       <StatusBadge state={connected?"connected":"connecting"} t={t}/>
     </div>
     <div style={{padding:"8px 12px",background:"#ffffff04",borderBottom:"1px solid #ffffff08",display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
@@ -723,6 +731,7 @@ function App(){
   </div>;
 }
 
+var sp=document.getElementById("splash");if(sp)sp.remove();
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
 </script>
 </body>
