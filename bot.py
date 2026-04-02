@@ -4,6 +4,8 @@ import asyncio
 import html
 import traceback
 import uuid
+import tempfile
+import stat as stat_mod
 from datetime import datetime
 
 import asyncssh
@@ -96,6 +98,12 @@ def find_server(user_id: int, server_id: str):
 # ─── Active SSH Sessions ───
 # user_id -> session info
 active_sessions = {}
+
+# ─── Active SFTP Sessions ───
+# user_id -> sftp state
+sftp_sessions = {}
+
+SFTP_PAGE_SIZE = 8  # files per page in chat listing
 
 
 class SSHSession:
@@ -307,6 +315,167 @@ class SSHSession:
                 self.conn.close()
         except Exception:
             pass
+
+
+# ─── SFTP Chat Functions ───
+
+async def sftp_connect(uid, server, bot, chat_id, msg_id):
+    """Connect SFTP and store session."""
+    srv = server
+    port = int(srv.get("port", 22))
+    connect_kwargs = {
+        "host": srv["host"], "port": port,
+        "username": srv["username"], "known_hosts": None,
+    }
+    if srv.get("auth_type") == "key":
+        key_data = srv.get("private_key", "")
+        passphrase = srv.get("passphrase") or None
+        pkey = asyncssh.import_private_key(key_data, passphrase)
+        connect_kwargs["client_keys"] = [pkey]
+    else:
+        connect_kwargs["password"] = srv.get("password", "")
+
+    conn = await asyncio.wait_for(asyncssh.connect(**connect_kwargs), timeout=15)
+    client = await conn.start_sftp_client()
+    try:
+        home = await client.getcwd()
+    except Exception:
+        home = "/"
+
+    sftp_sessions[uid] = {
+        "conn": conn, "client": client, "path": home,
+        "files": [], "page": 0, "server": srv,
+        "chat_id": chat_id, "msg_id": msg_id,
+        "awaiting_mkdir": False,
+    }
+    await sftp_list(uid, bot)
+
+
+async def sftp_close(uid):
+    """Close SFTP session."""
+    sess = sftp_sessions.pop(uid, None)
+    if sess:
+        try:
+            sess["client"].exit()
+        except Exception:
+            pass
+        try:
+            sess["conn"].close()
+        except Exception:
+            pass
+
+
+async def sftp_list(uid, bot):
+    """List current directory and send as message with buttons."""
+    sess = sftp_sessions.get(uid)
+    if not sess:
+        return
+    client = sess["client"]
+    path = sess["path"]
+
+    try:
+        entries = await client.readdir(path)
+    except Exception as e:
+        await bot.edit_message_text(
+            f"❌ Error: {html.escape(str(e))}",
+            chat_id=sess["chat_id"], message_id=sess["msg_id"],
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="sf:close")]
+            ]),
+        )
+        return
+
+    # Sort: dirs first, then files
+    items = []
+    for e in entries:
+        name = e.filename
+        if name in (".", ".."):
+            continue
+        perms = e.attrs.permissions
+        is_dir = bool(perms and stat_mod.S_ISDIR(perms)) if perms else False
+        size = e.attrs.size or 0
+        items.append({"name": name, "is_dir": is_dir, "size": size})
+    items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+    sess["files"] = items
+
+    page = sess["page"]
+    total_pages = max(1, (len(items) + SFTP_PAGE_SIZE - 1) // SFTP_PAGE_SIZE)
+    page = min(page, total_pages - 1)
+    sess["page"] = page
+    start = page * SFTP_PAGE_SIZE
+    page_items = items[start:start + SFTP_PAGE_SIZE]
+
+    label = sess["server"].get("label") or sess["server"]["host"]
+    text = (
+        f"📂 <b>SFTP</b> — {html.escape(label)}\n"
+        f"<code>{html.escape(path)}</code>\n"
+        f"📁 {len([x for x in items if x['is_dir']])} folders · "
+        f"📄 {len([x for x in items if not x['is_dir']])} files"
+    )
+    if total_pages > 1:
+        text += f" · 📖 {page + 1}/{total_pages}"
+
+    rows = []
+    for i, f in enumerate(page_items):
+        idx = start + i
+        icon = "📁" if f["is_dir"] else _file_icon(f["name"])
+        size_str = "" if f["is_dir"] else f" ({_human_size(f['size'])})"
+        btn_text = f"{icon} {f['name']}{size_str}"
+        if len(btn_text) > 40:
+            btn_text = btn_text[:37] + "..."
+        if f["is_dir"]:
+            rows.append([InlineKeyboardButton(btn_text, callback_data=f"sf:cd:{idx}")])
+        else:
+            rows.append([
+                InlineKeyboardButton(btn_text, callback_data=f"sf:info:{idx}"),
+            ])
+
+    # Navigation row
+    nav = []
+    nav.append(InlineKeyboardButton("⬆️ Up", callback_data="sf:up"))
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"sf:pg:{page - 1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"sf:pg:{page + 1}"))
+    rows.append(nav)
+
+    # Action row
+    rows.append([
+        InlineKeyboardButton("📤 Upload", callback_data="sf:upload"),
+        InlineKeyboardButton("📁 New Folder", callback_data="sf:mkdir"),
+    ])
+    rows.append([
+        InlineKeyboardButton("❌ Close", callback_data="sf:close"),
+    ])
+
+    try:
+        await bot.edit_message_text(
+            text, chat_id=sess["chat_id"], message_id=sess["msg_id"],
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows),
+        )
+    except Exception:
+        pass
+
+
+def _file_icon(name):
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    icons = {
+        "py": "🐍", "go": "🔷", "js": "📄", "ts": "📄", "sh": "⚙️",
+        "json": "📋", "yml": "📋", "yaml": "📋", "md": "📝", "txt": "📝",
+        "log": "📝", "html": "🌐", "css": "🎨", "jpg": "🖼", "jpeg": "🖼",
+        "png": "🖼", "gif": "🖼", "svg": "🖼", "mp4": "🎬", "mp3": "🎵",
+        "zip": "📦", "tar": "📦", "gz": "📦", "pdf": "📕", "conf": "⚙️",
+        "env": "🔒", "key": "🔑", "pem": "🔑",
+    }
+    return icons.get(ext, "📄")
+
+
+def _human_size(size):
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}TB"
 
 
 # ─── Keyboard builders ───
@@ -700,15 +869,193 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ─── SFTP (redirect to web app) ───
+    # ─── SFTP Chat ───
     if data.startswith("srv:sftp:"):
+        server_id = data.split(":", 2)[2]
+        srv = find_server(uid, server_id)
+        if not srv:
+            return
+        # Close any existing SFTP session
+        await sftp_close(uid)
+        label = srv.get("label") or srv["host"]
         await query.edit_message_text(
-            "📂 SFTP is available in the Web Terminal.\n"
-            "Open the Mini App to use SFTP:",
+            f"📂 Connecting SFTP to <b>{html.escape(label)}</b>...",
+            parse_mode="HTML",
+        )
+        try:
+            await sftp_connect(uid, srv, query.get_bot(), query.message.chat_id, query.message.message_id)
+        except Exception as e:
+            err_msg = str(e) or traceback.format_exc().split("\n")[-2]
+            await query.edit_message_text(
+                f"❌ SFTP connection failed:\n<code>{html.escape(err_msg)}</code>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="menu:chat_terminal")],
+                ]),
+            )
+        return
+
+    # ─── SFTP: Navigate into folder ───
+    if data.startswith("sf:cd:"):
+        sess = sftp_sessions.get(uid)
+        if not sess:
+            return
+        idx = int(data.split(":")[2])
+        if idx < len(sess["files"]):
+            f = sess["files"][idx]
+            if f["is_dir"]:
+                new_path = sess["path"].rstrip("/") + "/" + f["name"]
+                sess["path"] = new_path
+                sess["page"] = 0
+                await sftp_list(uid, query.get_bot())
+        return
+
+    # ─── SFTP: Go up ───
+    if data == "sf:up":
+        sess = sftp_sessions.get(uid)
+        if not sess:
+            return
+        path = sess["path"]
+        parent = path.rsplit("/", 1)[0] or "/"
+        sess["path"] = parent
+        sess["page"] = 0
+        await sftp_list(uid, query.get_bot())
+        return
+
+    # ─── SFTP: Pagination ───
+    if data.startswith("sf:pg:"):
+        sess = sftp_sessions.get(uid)
+        if not sess:
+            return
+        sess["page"] = int(data.split(":")[2])
+        await sftp_list(uid, query.get_bot())
+        return
+
+    # ─── SFTP: File info (download/delete) ───
+    if data.startswith("sf:info:"):
+        sess = sftp_sessions.get(uid)
+        if not sess:
+            return
+        idx = int(data.split(":")[2])
+        if idx < len(sess["files"]):
+            f = sess["files"][idx]
+            full_path = sess["path"].rstrip("/") + "/" + f["name"]
+            icon = _file_icon(f["name"])
+            await query.edit_message_text(
+                f"{icon} <b>{html.escape(f['name'])}</b>\n"
+                f"📏 {_human_size(f['size'])}\n"
+                f"📍 <code>{html.escape(full_path)}</code>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("📥 Download", callback_data=f"sf:dl:{idx}"),
+                        InlineKeyboardButton("🗑 Delete", callback_data=f"sf:rm:{idx}"),
+                    ],
+                    [InlineKeyboardButton("🔙 Back", callback_data="sf:back")],
+                ]),
+            )
+        return
+
+    # ─── SFTP: Download file ───
+    if data.startswith("sf:dl:"):
+        sess = sftp_sessions.get(uid)
+        if not sess:
+            return
+        idx = int(data.split(":")[2])
+        if idx < len(sess["files"]):
+            f = sess["files"][idx]
+            full_path = sess["path"].rstrip("/") + "/" + f["name"]
+            if f["size"] > 50 * 1024 * 1024:
+                await query.answer("❌ File too large (max 50MB)", show_alert=True)
+                return
+            await query.answer("📥 Downloading...")
+            try:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_" + f["name"])
+                tmp_path = tmp.name
+                tmp.close()
+                await sess["client"].get(full_path, tmp_path)
+                with open(tmp_path, "rb") as fh:
+                    await query.get_bot().send_document(
+                        chat_id=sess["chat_id"],
+                        document=fh,
+                        filename=f["name"],
+                        caption=f"📥 <code>{html.escape(full_path)}</code>",
+                        parse_mode="HTML",
+                    )
+                os.unlink(tmp_path)
+            except Exception as e:
+                await query.get_bot().send_message(
+                    chat_id=sess["chat_id"],
+                    text=f"❌ Download failed: {html.escape(str(e))}",
+                )
+        return
+
+    # ─── SFTP: Delete file ───
+    if data.startswith("sf:rm:"):
+        sess = sftp_sessions.get(uid)
+        if not sess:
+            return
+        idx = int(data.split(":")[2])
+        if idx < len(sess["files"]):
+            f = sess["files"][idx]
+            full_path = sess["path"].rstrip("/") + "/" + f["name"]
+            try:
+                if f["is_dir"]:
+                    await sess["client"].rmtree(full_path)
+                else:
+                    await sess["client"].remove(full_path)
+            except Exception as e:
+                await query.answer(f"❌ {e}", show_alert=True)
+                return
+            await sftp_list(uid, query.get_bot())
+        return
+
+    # ─── SFTP: Back to listing ───
+    if data == "sf:back":
+        sess = sftp_sessions.get(uid)
+        if sess:
+            await sftp_list(uid, query.get_bot())
+        return
+
+    # ─── SFTP: Mkdir prompt ───
+    if data == "sf:mkdir":
+        sess = sftp_sessions.get(uid)
+        if not sess:
+            return
+        sess["awaiting_mkdir"] = True
+        await query.edit_message_text(
+            f"📁 Send the folder name to create in:\n"
+            f"<code>{html.escape(sess['path'])}</code>",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🖥 Open Web Terminal", web_app=WebAppInfo(url=WEBAPP_URL))],
-                [InlineKeyboardButton("🔙 Back", callback_data="menu:chat_terminal")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sf:back")],
             ]),
+        )
+        return
+
+    # ─── SFTP: Upload prompt ───
+    if data == "sf:upload":
+        sess = sftp_sessions.get(uid)
+        if not sess:
+            return
+        sess["awaiting_upload"] = True
+        await query.edit_message_text(
+            f"📤 Send a file to upload to:\n"
+            f"<code>{html.escape(sess['path'])}</code>\n\n"
+            f"Max 50MB.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Cancel", callback_data="sf:back")],
+            ]),
+        )
+        return
+
+    # ─── SFTP: Close ───
+    if data == "sf:close":
+        await sftp_close(uid)
+        await query.edit_message_text(
+            "📂 SFTP session closed.",
+            reply_markup=main_menu_keyboard(),
         )
         return
 
@@ -717,7 +1064,52 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    text = update.message.text
+    text = update.message.text or ""
+
+    # ─── SFTP: File upload (document received) ───
+    sess = sftp_sessions.get(uid)
+    if sess and sess.get("awaiting_upload") and update.message.document:
+        sess["awaiting_upload"] = False
+        doc = update.message.document
+        if doc.file_size > 50 * 1024 * 1024:
+            await update.message.reply_text("❌ File too large (max 50MB)")
+            await sftp_list(uid, context.bot)
+            return
+        try:
+            tg_file = await doc.get_file()
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_" + doc.file_name)
+            tmp_path = tmp.name
+            tmp.close()
+            await tg_file.download_to_drive(tmp_path)
+            remote_path = sess["path"].rstrip("/") + "/" + doc.file_name
+            await sess["client"].put(tmp_path, remote_path)
+            os.unlink(tmp_path)
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+        except Exception as e:
+            await update.message.reply_text(f"❌ Upload failed: {e}")
+        await sftp_list(uid, context.bot)
+        return
+
+    # ─── SFTP: mkdir response ───
+    sess = sftp_sessions.get(uid)
+    if sess and sess.get("awaiting_mkdir") and text:
+        sess["awaiting_mkdir"] = False
+        folder_name = text.strip()
+        if folder_name:
+            full_path = sess["path"].rstrip("/") + "/" + folder_name
+            try:
+                await sess["client"].mkdir(full_path)
+            except Exception as e:
+                await update.message.reply_text(f"❌ {e}")
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        await sftp_list(uid, context.bot)
+        return
 
     # ─── Check if user is adding a server ───
     adding = context.user_data.get("adding_server")

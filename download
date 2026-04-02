@@ -1,0 +1,16 @@
+# Environment
+.env
+
+# User data
+users.json
+servers_data.json
+
+# Build artifacts
+*.bak
+node_modules/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
