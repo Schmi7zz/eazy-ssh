@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import time
 import asyncio
 import html
 import traceback
@@ -22,14 +24,19 @@ from telegram.ext import (
 
 # ─── Config ───
 TOKEN = os.getenv("BOT_TOKEN", "")
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://ssh-terminal.yourdomain.com")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 USERS_FILE = "/opt/ssh-terminal/users.json"
 SERVERS_FILE = "/opt/ssh-terminal/servers_data.json"
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
+# Required channel membership
+REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "")
+REQUIRED_CHANNEL_URL = os.getenv("REQUIRED_CHANNEL_URL", "")
+
 # Terminal display config
 MAX_LINES = 35          # max lines shown in terminal message
 OUTPUT_BUFFER_SEC = 1.5 # seconds between message edits
+LOG_BUFFER_SEC = 2.0    # seconds between log messages
 MAX_MSG_LEN = 4000      # telegram limit safety margin
 
 # ─── Conversation states ───
@@ -106,8 +113,465 @@ sftp_sessions = {}
 SFTP_PAGE_SIZE = 8  # files per page in chat listing
 
 
+# ─── Channel Membership Check ───
+
+# Cache to avoid spamming getChatMember API: user_id -> (is_member, timestamp)
+_membership_cache = {}
+_MEMBERSHIP_CACHE_TTL = 10  # seconds
+
+
+async def is_channel_member(bot, user_id: int) -> bool:
+    """Check if user is member of REQUIRED_CHANNEL. Cached for 10 seconds."""
+    # No channel configured → allow everyone
+    if not REQUIRED_CHANNEL:
+        return True
+
+    # Admin bypass
+    if user_id == ADMIN_ID:
+        return True
+
+    # Check cache
+    cached = _membership_cache.get(user_id)
+    if cached:
+        is_member, ts = cached
+        if time.time() - ts < _MEMBERSHIP_CACHE_TTL:
+            return is_member
+
+    try:
+        member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
+        # Valid member statuses
+        is_member = member.status in ("creator", "administrator", "member", "restricted")
+    except Exception:
+        # If channel check fails (bot not admin, user never interacted, etc.)
+        is_member = False
+
+    _membership_cache[user_id] = (is_member, time.time())
+    return is_member
+
+
+def invalidate_membership_cache(user_id: int):
+    """Clear cached membership status for a user."""
+    _membership_cache.pop(user_id, None)
+
+
+def join_channel_keyboard():
+    """Keyboard shown to non-members."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 عضویت در کانال", url=REQUIRED_CHANNEL_URL)],
+        [InlineKeyboardButton("🔄 بررسی مجدد", callback_data="check_membership")],
+    ])
+
+
+async def require_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Check membership and show join prompt if not member.
+    Returns True if user is member (can proceed), False otherwise.
+    """
+    uid = update.effective_user.id
+    if await is_channel_member(context.bot, uid):
+        return True
+
+    # Not a member → close any active sessions
+    if uid in active_sessions:
+        try:
+            await active_sessions[uid].disconnect()
+        except Exception:
+            pass
+        active_sessions.pop(uid, None)
+    if uid in sftp_sessions:
+        await sftp_close(uid)
+
+    text = (
+        f"🔒 <b>دسترسی محدود</b>\n\n"
+        f"برای استفاده از ربات باید عضو کانال زیر باشید:\n"
+        f"👉 {REQUIRED_CHANNEL}\n\n"
+        f"بعد از عضویت روی <b>بررسی مجدد</b> بزنید."
+    )
+
+    try:
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(
+                text, parse_mode="HTML", reply_markup=join_channel_keyboard(),
+            )
+        else:
+            await update.message.reply_text(
+                text, parse_mode="HTML", reply_markup=join_channel_keyboard(),
+            )
+    except Exception:
+        pass
+    return False
+
+
+class VT100Screen:
+    """Lightweight VT100 screen buffer for proper full-screen app rendering."""
+
+    def __init__(self, cols=80, rows=24):
+        self.cols = cols
+        self.rows = rows
+        self.buffer = [self._empty_row() for _ in range(rows)]
+        self.cursor_row = 0
+        self.cursor_col = 0
+        self.saved_cursor = (0, 0)
+        # Scrollback for shell output (lines that scrolled off screen)
+        self.scrollback = []
+        self.max_scrollback = 200
+
+    def _empty_row(self):
+        return [" "] * self.cols
+
+    def feed(self, data):
+        """Process raw terminal data (with ANSI escape codes)."""
+        i = 0
+        n = len(data)
+        while i < n:
+            ch = data[i]
+
+            if ch == "\x1b":  # ESC
+                i, consumed = self._parse_escape(data, i)
+                if not consumed:
+                    i += 1
+                continue
+
+            if ch == "\r":
+                self.cursor_col = 0
+                i += 1
+                continue
+
+            if ch == "\n":
+                self._line_feed()
+                i += 1
+                continue
+
+            if ch == "\b":
+                self.cursor_col = max(0, self.cursor_col - 1)
+                i += 1
+                continue
+
+            if ch == "\t":
+                # Tab: advance to next multiple of 8
+                self.cursor_col = min(self.cols - 1, (self.cursor_col // 8 + 1) * 8)
+                i += 1
+                continue
+
+            if ch == "\x07":  # BEL
+                i += 1
+                continue
+
+            # Printable character
+            if ord(ch) >= 32:
+                if self.cursor_col >= self.cols:
+                    # Auto-wrap
+                    self.cursor_col = 0
+                    self._line_feed()
+                self.buffer[self.cursor_row][self.cursor_col] = ch
+                self.cursor_col += 1
+
+            i += 1
+
+    def _parse_escape(self, data, pos):
+        """Parse escape sequence starting at pos. Returns (new_pos, consumed)."""
+        if pos + 1 >= len(data):
+            return pos, False
+
+        ch2 = data[pos + 1]
+
+        # CSI: ESC [
+        if ch2 == "[":
+            return self._parse_csi(data, pos + 2)
+
+        # OSC: ESC ]
+        if ch2 == "]":
+            # Skip until BEL or ST
+            j = pos + 2
+            while j < len(data):
+                if data[j] == "\x07":
+                    return j + 1, True
+                if data[j] == "\x1b" and j + 1 < len(data) and data[j + 1] == "\\":
+                    return j + 2, True
+                j += 1
+            return len(data), True
+
+        # Character set: ESC ( or ESC )
+        if ch2 in ("(", ")"):
+            return pos + 3 if pos + 2 < len(data) else pos + 2, True
+
+        # ESC = or ESC > (keypad modes)
+        if ch2 in ("=", ">"):
+            return pos + 2, True
+
+        # ESC 7 (save cursor) / ESC 8 (restore cursor)
+        if ch2 == "7":
+            self.saved_cursor = (self.cursor_row, self.cursor_col)
+            return pos + 2, True
+        if ch2 == "8":
+            self.cursor_row, self.cursor_col = self.saved_cursor
+            return pos + 2, True
+
+        return pos + 2, True
+
+    def _parse_csi(self, data, pos):
+        """Parse CSI sequence (after ESC [). Returns (new_pos, consumed)."""
+        params_str = ""
+        private = False
+        j = pos
+
+        # Check for private marker
+        if j < len(data) and data[j] == "?":
+            private = True
+            j += 1
+
+        # Collect parameter bytes
+        while j < len(data) and (data[j].isdigit() or data[j] == ";"):
+            params_str += data[j]
+            j += 1
+
+        if j >= len(data):
+            return len(data), True
+
+        cmd = data[j]
+        j += 1
+
+        # Parse parameters
+        params = []
+        if params_str:
+            for p in params_str.split(";"):
+                try:
+                    params.append(int(p))
+                except ValueError:
+                    params.append(0)
+
+        if private:
+            # Private CSI sequences (cursor show/hide, etc.) - ignore
+            return j, True
+
+        # Execute CSI command
+        if cmd == "H" or cmd == "f":  # Cursor position
+            row = (params[0] if params else 1) - 1
+            col = (params[1] if len(params) > 1 else 1) - 1
+            self.cursor_row = max(0, min(self.rows - 1, row))
+            self.cursor_col = max(0, min(self.cols - 1, col))
+
+        elif cmd == "A":  # Cursor up
+            n = params[0] if params else 1
+            self.cursor_row = max(0, self.cursor_row - n)
+
+        elif cmd == "B":  # Cursor down
+            n = params[0] if params else 1
+            self.cursor_row = min(self.rows - 1, self.cursor_row + n)
+
+        elif cmd == "C":  # Cursor forward
+            n = params[0] if params else 1
+            self.cursor_col = min(self.cols - 1, self.cursor_col + n)
+
+        elif cmd == "D":  # Cursor back
+            n = params[0] if params else 1
+            self.cursor_col = max(0, self.cursor_col - n)
+
+        elif cmd == "J":  # Erase in display
+            mode = params[0] if params else 0
+            if mode == 0:  # Cursor to end
+                self.buffer[self.cursor_row][self.cursor_col:] = [" "] * (self.cols - self.cursor_col)
+                for r in range(self.cursor_row + 1, self.rows):
+                    self.buffer[r] = self._empty_row()
+            elif mode == 1:  # Start to cursor
+                for r in range(self.cursor_row):
+                    self.buffer[r] = self._empty_row()
+                self.buffer[self.cursor_row][:self.cursor_col + 1] = [" "] * (self.cursor_col + 1)
+            elif mode == 2 or mode == 3:  # Entire screen
+                self.buffer = [self._empty_row() for _ in range(self.rows)]
+
+        elif cmd == "K":  # Erase in line
+            mode = params[0] if params else 0
+            if mode == 0:  # Cursor to end
+                self.buffer[self.cursor_row][self.cursor_col:] = [" "] * (self.cols - self.cursor_col)
+            elif mode == 1:  # Start to cursor
+                self.buffer[self.cursor_row][:self.cursor_col + 1] = [" "] * (self.cursor_col + 1)
+            elif mode == 2:  # Entire line
+                self.buffer[self.cursor_row] = self._empty_row()
+
+        elif cmd == "m":  # SGR (colors/attributes) - ignore
+            pass
+
+        elif cmd == "r":  # Set scrolling region - ignore for now
+            pass
+
+        elif cmd == "s":  # Save cursor
+            self.saved_cursor = (self.cursor_row, self.cursor_col)
+
+        elif cmd == "u":  # Restore cursor
+            self.cursor_row, self.cursor_col = self.saved_cursor
+
+        elif cmd == "L":  # Insert lines
+            n = params[0] if params else 1
+            for _ in range(n):
+                if self.cursor_row < self.rows:
+                    self.buffer.insert(self.cursor_row, self._empty_row())
+                    self.buffer.pop()
+
+        elif cmd == "M":  # Delete lines
+            n = params[0] if params else 1
+            for _ in range(n):
+                if self.cursor_row < self.rows:
+                    self.buffer.pop(self.cursor_row)
+                    self.buffer.append(self._empty_row())
+
+        elif cmd == "P":  # Delete characters
+            n = params[0] if params else 1
+            row = self.buffer[self.cursor_row]
+            del row[self.cursor_col:self.cursor_col + n]
+            row.extend([" "] * n)
+            self.buffer[self.cursor_row] = row[:self.cols]
+
+        elif cmd == "@":  # Insert characters
+            n = params[0] if params else 1
+            row = self.buffer[self.cursor_row]
+            for _ in range(n):
+                row.insert(self.cursor_col, " ")
+            self.buffer[self.cursor_row] = row[:self.cols]
+
+        return j, True
+
+    def _line_feed(self):
+        """Handle line feed (scroll if at bottom)."""
+        if self.cursor_row < self.rows - 1:
+            self.cursor_row += 1
+        else:
+            # Scroll up: save top line to scrollback
+            top_line = "".join(self.buffer[0]).rstrip()
+            if top_line:
+                self.scrollback.append(top_line)
+                if len(self.scrollback) > self.max_scrollback:
+                    self.scrollback.pop(0)
+            self.buffer.pop(0)
+            self.buffer.append(self._empty_row())
+
+    def display(self):
+        """Get current screen content as list of strings."""
+        lines = []
+        for row in self.buffer:
+            lines.append("".join(row).rstrip())
+        # Remove trailing empty lines
+        while lines and not lines[-1]:
+            lines.pop()
+        return lines if lines else [""]
+
+    def display_with_scrollback(self, max_lines=35):
+        """Get scrollback + current screen for shell display."""
+        screen_lines = self.display()
+        # In shell mode, include scrollback for history
+        all_lines = self.scrollback[-max_lines:] + screen_lines
+        return all_lines[-max_lines:]
+
+    def get_raw_text(self):
+        """Get all visible text for context detection."""
+        return "\n".join(self.display())
+
+
 class SSHSession:
     """Manages a single SSH connection for chat terminal."""
+
+    # ─── Context detection patterns ───
+    CONTEXT_PATTERNS = {
+        "nano": ["GNU nano", "[ New File ]", "[ Read ", "^G Help", "^X Exit"],
+        "vim": ["-- INSERT --", "-- VISUAL --", "-- REPLACE --", "~                ", "E37:", "E162:", ":set "],
+        "tmux": ["[0]", "[1]", "[2]", "[detached]"],
+        "htop": ["htop", "PID USER", "CPU%", "MEM%", "Swp["],
+        "top": ["top -", "load average:", "%Cpu(s):", "KiB Mem"],
+        "less": ["(END)", "lines ", "byte "],
+        "python": [">>> ", "... ", "Python 3", "Python 2"],
+        "mysql": ["mysql>", "MariaDB"],
+        "confirm": ["[Y/n]", "[y/N]", "(y/n)", "(Y/N)", "yes/no", "Continue?", "[y/n]"],
+    }
+
+    # ─── Interactive editor contexts (text goes raw, no newline) ───
+    RAW_INPUT_CONTEXTS = {"nano", "nano_exit", "nano_filename", "vim", "python", "mysql"}
+
+    # ─── Context-specific keyboards ───
+    CONTEXT_KEYBOARDS = {
+        "nano": [
+            [("💾 Ctrl+O Save", "ctx:ctrl_o"), ("❌ Ctrl+X Exit", "ctx:ctrl_x")],
+            [("🔍 Ctrl+W Search", "ctx:ctrl_w"), ("✂️ Ctrl+K Cut", "ctx:ctrl_k")],
+            [("📋 Ctrl+U Paste", "ctx:ctrl_u"), ("🔄 Ctrl+\\ Replace", "ctx:ctrl_bslash")],
+        ],
+        "nano_exit": [
+            [("✅ Y (Save)", "ctx:key_Y"), ("❌ N (Discard)", "ctx:key_N")],
+            [("↩️ Ctrl+C Cancel", "ctx:ctrl_c")],
+        ],
+        "nano_filename": [
+            [("⏎ Enter (Confirm)", "ctx:enter")],
+            [("↩️ Ctrl+C Cancel", "ctx:ctrl_c")],
+        ],
+        "vim": [
+            [("💾 :wq Save+Quit", "ctx:vim_wq"), ("❌ :q! Force Quit", "ctx:vim_q")],
+            [("📝 i Insert", "ctx:key_i"), ("⎋ Esc", "ctx:esc")],
+            [("💾 :w Save", "ctx:vim_w"), ("↩️ u Undo", "ctx:key_u")],
+        ],
+        "tmux": [
+            [("🔀 Ctrl+B d Detach", "ctx:tmux_detach"), ("➕ Ctrl+B c New", "ctx:tmux_new")],
+            [("◀️ Ctrl+B p Prev", "ctx:tmux_prev"), ("▶️ Ctrl+B n Next", "ctx:tmux_next")],
+            [("📋 Ctrl+B w List", "ctx:tmux_list"), ("🔢 Ctrl+B s Sessions", "ctx:tmux_sessions")],
+            [("📎 Ctrl+B [ Copy", "ctx:tmux_copy"), ("✂️ Ctrl+B % SplitH", "ctx:tmux_splith")],
+        ],
+        "htop": [
+            [("❌ q Quit", "ctx:key_q"), ("🔍 / Filter", "ctx:key_slash")],
+            [("🌳 t Tree", "ctx:key_t"), ("📊 s Sort", "ctx:key_s")],
+            [("❓ h Help", "ctx:key_h"), ("🔍 F3 Search", "ctx:key_F3")],
+        ],
+        "top": [
+            [("❌ q Quit", "ctx:key_q"), ("📊 M Mem Sort", "ctx:key_M")],
+            [("🔄 P CPU Sort", "ctx:key_P"), ("1 Per-CPU", "ctx:key_1")],
+        ],
+        "less": [
+            [("❌ q Quit", "ctx:key_q"), ("🔍 / Search", "ctx:key_slash")],
+            [("⬇️ Space Next", "ctx:key_space"), ("⬆️ b Back", "ctx:key_b")],
+            [("⬇️ G End", "ctx:key_G"), ("⬆️ g Start", "ctx:key_gg")],
+        ],
+        "python": [
+            [("❌ exit()", "ctx:py_exit"), ("⛔ Ctrl+D", "ctx:ctrl_d")],
+            [("⛔ Ctrl+C", "ctx:ctrl_c"), ("⏎ Enter", "ctx:enter")],
+        ],
+        "mysql": [
+            [("❌ exit", "ctx:mysql_exit"), ("📋 show databases;", "ctx:mysql_showdb")],
+            [("📋 show tables;", "ctx:mysql_showtbl"), ("⏎ Enter", "ctx:enter")],
+        ],
+        "confirm": [
+            [("✅ Y", "ctx:key_y"), ("❌ N", "ctx:key_n")],
+            [("⛔ Ctrl+C Cancel", "ctx:ctrl_c")],
+        ],
+    }
+
+    # ─── Callback → byte mapping ───
+    CTX_MAP = {
+        # Control chars
+        "ctrl_a": "\x01", "ctrl_b": "\x02", "ctrl_c": "\x03",
+        "ctrl_d": "\x04", "ctrl_k": "\x0b", "ctrl_o": "\x0f",
+        "ctrl_u": "\x15", "ctrl_w": "\x17", "ctrl_x": "\x18",
+        "ctrl_z": "\x1a", "ctrl_bslash": "\x1c",
+        "esc": "\x1b", "tab": "\t", "enter": "\r",
+        # Arrow keys
+        "arrow_up": "\x1b[A", "arrow_down": "\x1b[B",
+        "arrow_right": "\x1b[C", "arrow_left": "\x1b[D",
+        # Function keys
+        "key_F3": "\x1bOR",
+        # Single keys
+        "key_Y": "Y", "key_N": "N", "key_y": "y", "key_n": "n",
+        "key_i": "i", "key_q": "q", "key_t": "t", "key_s": "s",
+        "key_b": "b", "key_h": "h", "key_u": "u",
+        "key_M": "M", "key_P": "P", "key_G": "G", "key_1": "1",
+        "key_slash": "/", "key_space": " ",
+        # Multi-char sequences
+        "key_gg": "gg",
+        "vim_wq": "\x1b:wq\r", "vim_q": "\x1b:q!\r", "vim_w": "\x1b:w\r",
+        "py_exit": "exit()\r",
+        "mysql_exit": "exit\r", "mysql_showdb": "show databases;\r",
+        "mysql_showtbl": "show tables;\r",
+        # Tmux sequences (Ctrl+B prefix)
+        "tmux_detach": "\x02d", "tmux_new": "\x02c",
+        "tmux_next": "\x02n", "tmux_prev": "\x02p",
+        "tmux_list": "\x02w", "tmux_sessions": "\x02s",
+        "tmux_copy": "\x02[", "tmux_splith": "\x02%",
+    }
 
     def __init__(self, user_id: int, server: dict, bot, chat_id: int, message_id: int):
         self.user_id = user_id
@@ -117,13 +581,21 @@ class SSHSession:
         self.message_id = message_id  # the terminal display message
         self.conn = None
         self.process = None
-        self.output_lines = []
         self.output_buffer = ""
         self.buffer_lock = asyncio.Lock()
         self.update_task = None
         self.alive = False
         self.last_edit = 0
         self._manual_disconnect = False
+        # ─── output mode & context ───
+        self.output_mode = "stream"  # "stream" or "log"
+        self.detected_context = "default"
+        self._context_lock_until = 0  # state machine lock timestamp
+        self.log_sent_index = 0
+        self.full_output_lines = []  # for log mode
+        # ─── VT100 screen buffer for proper rendering ───
+        self.screen = VT100Screen(80, 24)
+        self.output_lines = []  # derived from screen for display
 
     async def connect(self):
         """Establish SSH connection."""
@@ -175,71 +647,227 @@ class SSHSession:
             pass
         finally:
             self.alive = False
-            # Final update (skip if user manually disconnected)
             if not self._manual_disconnect:
-                await self._flush_and_update()
-                await self._update_terminal_message(disconnected=True)
+                try:
+                    await self._flush_and_update()
+                    await self._update_terminal_message(disconnected=True)
+                except Exception:
+                    pass  # Python may be shutting down
 
     async def _output_loop(self):
         """Periodically flush buffer and edit the terminal message."""
-        while self.alive:
-            await asyncio.sleep(OUTPUT_BUFFER_SEC)
-            await self._flush_and_update()
+        try:
+            while self.alive:
+                interval = LOG_BUFFER_SEC if self.output_mode == "log" else OUTPUT_BUFFER_SEC
+                await asyncio.sleep(interval)
+                await self._flush_and_update()
+        except (asyncio.CancelledError, Exception):
+            pass
 
     async def _flush_and_update(self):
-        """Process buffer into lines and update message."""
+        """Process buffer through VT100 screen and update message."""
         async with self.buffer_lock:
             if not self.output_buffer:
                 return
             raw = self.output_buffer
             self.output_buffer = ""
 
-        # Strip ANSI escape codes for cleaner display
+        # Feed raw data through VT100 screen buffer (handles cursor positioning)
+        self.screen.feed(raw)
+
+        # Get properly rendered screen lines
+        self.output_lines = self.screen.display_with_scrollback(MAX_LINES)
+
+        # For log mode, track new output using a simple ANSI-stripped version
         clean = self._strip_ansi(raw)
+        new_log_lines = clean.split("\n")
+        for line in new_log_lines:
+            line = line.replace("\r", "").strip()
+            if line:
+                self.full_output_lines.append(line)
 
-        # Process into lines
-        for char in clean:
-            if char == "\r":
-                continue
-            elif char == "\n":
-                self.output_lines.append("")
-            elif char == "\b":
-                if self.output_lines and self.output_lines[-1]:
-                    self.output_lines[-1] = self.output_lines[-1][:-1]
-            else:
-                if not self.output_lines:
-                    self.output_lines.append("")
-                self.output_lines[-1] += char
+        # Detect context from screen content
+        self._detect_context()
 
-        # Trim to max lines
-        if len(self.output_lines) > MAX_LINES * 2:
-            self.output_lines = self.output_lines[-MAX_LINES:]
+        # Cap full_output_lines to prevent unbounded memory growth
+        MAX_FULL_LINES = 5000
+        if len(self.full_output_lines) > MAX_FULL_LINES:
+            overflow = len(self.full_output_lines) - MAX_FULL_LINES
+            self.full_output_lines = self.full_output_lines[-MAX_FULL_LINES:]
+            self.log_sent_index = max(0, self.log_sent_index - overflow)
 
-        await self._update_terminal_message()
+        if self.output_mode == "log":
+            await self._send_log_chunk()
+            await self._update_terminal_message()
+        else:
+            await self._update_terminal_message()
 
     def _strip_ansi(self, text):
-        """Remove ANSI escape sequences."""
-        import re
-        return re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]|\x1b\[[\?]?[0-9;]*[a-zA-Z]', '', text)
+        """Remove ANSI escape sequences (for log mode text)."""
+        text = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', text)
+        text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)', '', text)
+        text = re.sub(r'\x1b[()][0-9A-B]', '', text)
+        text = re.sub(r'\x1b[=>78]', '', text)
+        return text
+
+    def _detect_context(self):
+        """Detect running program from screen content."""
+        # Skip detection if context was recently set by state machine
+        if time.time() < self._context_lock_until:
+            return
+
+        # Use screen's rendered lines for accurate detection
+        screen_lines = self.screen.display()
+        all_text = "\n".join(screen_lines)
+        # Bottom area of screen (where status/prompts appear)
+        bottom_lines = screen_lines[-5:] if len(screen_lines) >= 5 else screen_lines
+        bottom_text = "\n".join(bottom_lines)
+
+        # ── Nano state machine (ordered by priority) ──
+        # 1) nano filename prompt: "File Name to Write:" after pressing Y
+        for line in bottom_lines:
+            if "File Name to Write:" in line or "file name to write:" in line.lower():
+                self.detected_context = "nano_filename"
+                return
+
+        # 2) nano exit prompt: "Save modified buffer?" after pressing Ctrl+X
+        for line in bottom_lines:
+            if "Save modified buffer" in line or "save modified buffer" in line:
+                self.detected_context = "nano_exit"
+                return
+
+        # 3) nano editor is open
+        for pattern in self.CONTEXT_PATTERNS["nano"]:
+            if pattern in all_text:
+                self.detected_context = "nano"
+                return
+
+        # ── Check confirm prompts (high priority) ──
+        for pattern in self.CONTEXT_PATTERNS["confirm"]:
+            if pattern.lower() in bottom_text.lower():
+                self.detected_context = "confirm"
+                return
+
+        # ── Check all other contexts ──
+        for ctx, patterns in self.CONTEXT_PATTERNS.items():
+            if ctx in ("confirm", "nano"):
+                continue
+            for pattern in patterns:
+                if pattern in all_text:
+                    self.detected_context = ctx
+                    return
+
+        # ── Default (shell) ──
+        self.detected_context = "default"
+
+    def _build_keyboard(self, disconnected=False):
+        """Build context-aware keyboard."""
+        srv = self.server
+
+        if disconnected:
+            return [[
+                InlineKeyboardButton("🔄 Reconnect", callback_data=f"reconnect:{srv['id']}"),
+                InlineKeyboardButton("🏠 Home", callback_data="menu:main"),
+            ]]
+
+        # Mode toggle button
+        if self.output_mode == "stream":
+            mode_btn = InlineKeyboardButton("📜 Log", callback_data="term:mode:log")
+        else:
+            mode_btn = InlineKeyboardButton("📺 Stream", callback_data="term:mode:stream")
+
+        # Context-specific buttons
+        ctx = self.detected_context
+        if ctx in self.CONTEXT_KEYBOARDS:
+            keyboard = []
+            for row in self.CONTEXT_KEYBOARDS[ctx]:
+                kb_row = []
+                for label, cb_data in row:
+                    kb_row.append(InlineKeyboardButton(label, callback_data=cb_data))
+                keyboard.append(kb_row)
+            # Common controls row
+            keyboard.append([
+                mode_btn,
+                InlineKeyboardButton("🧹 Clear", callback_data="term:clear"),
+                InlineKeyboardButton("⏹ DC", callback_data="term:disconnect"),
+            ])
+            return keyboard
+
+        # Default keyboard (shell mode)
+        return [
+            [
+                InlineKeyboardButton("⏎ Enter", callback_data="ctx:enter"),
+                InlineKeyboardButton("⛔ Ctrl+C", callback_data="ctx:ctrl_c"),
+                InlineKeyboardButton("⌛ Ctrl+Z", callback_data="ctx:ctrl_z"),
+            ],
+            [
+                InlineKeyboardButton("⬆️", callback_data="ctx:arrow_up"),
+                InlineKeyboardButton("⬇️", callback_data="ctx:arrow_down"),
+                InlineKeyboardButton("↹ Tab", callback_data="ctx:tab"),
+                InlineKeyboardButton("Ctrl+D", callback_data="ctx:ctrl_d"),
+            ],
+            [
+                mode_btn,
+                InlineKeyboardButton("🧹 Clear", callback_data="term:clear"),
+                InlineKeyboardButton("⏹ DC", callback_data="term:disconnect"),
+            ],
+        ]
+
+    async def _send_log_chunk(self):
+        """Send new output as a separate message (log mode)."""
+        total = len(self.full_output_lines)
+        if total <= self.log_sent_index:
+            return
+
+        new_lines = self.full_output_lines[self.log_sent_index:total]
+        self.log_sent_index = total
+
+        # Build chunk text, skip if only whitespace
+        chunk_text = "\n".join(new_lines).strip()
+        if not chunk_text:
+            return
+
+        # Split into parts if too long
+        parts = []
+        current = ""
+        for line in new_lines:
+            candidate = current + "\n" + line if current else line
+            if len(candidate) > MAX_MSG_LEN - 150:
+                if current.strip():
+                    parts.append(current)
+                current = line
+            else:
+                current = candidate
+        if current.strip():
+            parts.append(current)
+
+        for part in parts:
+            escaped = html.escape(part.strip())
+            if not escaped:
+                continue
+            try:
+                await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=f"<pre>{escaped}</pre>",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                # If HTML parse fails, try plain text
+                try:
+                    await self.bot.send_message(
+                        chat_id=self.chat_id,
+                        text=part.strip()[:MAX_MSG_LEN],
+                    )
+                except Exception:
+                    pass
 
     async def _update_terminal_message(self, disconnected=False):
         """Edit the terminal message with current output."""
-        import time
         now = time.time()
 
         # Rate limit: don't edit more than once per second
         if not disconnected and (now - self.last_edit) < 1.0:
             return
-
-        lines = self.output_lines[-MAX_LINES:] if self.output_lines else [""]
-        terminal_text = "\n".join(lines)
-
-        # Truncate if too long
-        if len(terminal_text) > MAX_MSG_LEN - 200:
-            terminal_text = terminal_text[-(MAX_MSG_LEN - 200):]
-
-        # Escape HTML
-        terminal_text = html.escape(terminal_text)
 
         srv = self.server
         label = srv.get("label") or srv["host"]
@@ -247,7 +875,33 @@ class SSHSession:
         if disconnected:
             status_line = "🔴 Disconnected"
         else:
-            status_line = "🟢 Connected"
+            ctx_name = self.detected_context
+            ctx_display = {
+                "nano": "📝 nano", "nano_exit": "📝 nano ⚠️ save?",
+                "nano_filename": "📝 nano 📄 filename?",
+                "vim": "📝 vim", "tmux": "🔲 tmux",
+                "htop": "📊 htop", "top": "📊 top",
+                "less": "📄 less", "python": "🐍 python",
+                "mysql": "🗄 mysql", "confirm": "❓ confirm",
+            }.get(ctx_name, "")
+            mode_icon = "📺" if self.output_mode == "stream" else "📜"
+            status_line = f"🟢 Connected  {mode_icon} {ctx_display}".strip()
+
+        if self.output_mode == "log" and not disconnected:
+            # In log mode, show last few lines as preview + buttons
+            preview_lines = self.output_lines[-5:] if self.output_lines else [""]
+            preview_text = "\n".join(preview_lines).strip() or "(waiting for output...)"
+            if len(preview_text) > 500:
+                preview_text = preview_text[-500:]
+            terminal_text = html.escape(preview_text)
+            log_info = f"\n📜 <i>Log mode — new output sent as messages</i>"
+        else:
+            lines = self.output_lines[-MAX_LINES:] if self.output_lines else [""]
+            terminal_text = "\n".join(lines)
+            if len(terminal_text) > MAX_MSG_LEN - 200:
+                terminal_text = terminal_text[-(MAX_MSG_LEN - 200):]
+            terminal_text = html.escape(terminal_text)
+            log_info = ""
 
         msg = (
             f"🖥 <b>Terminal — {html.escape(label)}</b>\n"
@@ -255,30 +909,10 @@ class SSHSession:
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"<pre>{terminal_text}</pre>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{status_line}"
+            f"{status_line}{log_info}"
         )
 
-        # Build keyboard
-        if disconnected:
-            keyboard = [[
-                InlineKeyboardButton("🔄 Reconnect", callback_data=f"reconnect:{srv['id']}"),
-                InlineKeyboardButton("🏠 Home", callback_data="menu:main"),
-            ]]
-        else:
-            keyboard = [
-                [
-                    InlineKeyboardButton("⏎ Enter", callback_data="term:enter"),
-                    InlineKeyboardButton("⛔ Ctrl+C", callback_data="term:ctrlc"),
-                ],
-                [
-                    InlineKeyboardButton("✂️ Ctrl+X", callback_data="term:ctrlx"),
-                    InlineKeyboardButton("📎 Ctrl+B", callback_data="term:ctrlb"),
-                ],
-                [
-                    InlineKeyboardButton("⏹ Disconnect", callback_data="term:disconnect"),
-                    InlineKeyboardButton("🧹 Clear", callback_data="term:clear"),
-                ],
-            ]
+        keyboard = self._build_keyboard(disconnected)
 
         try:
             await self.bot.edit_message_text(
@@ -293,9 +927,15 @@ class SSHSession:
             pass  # message not modified or rate limited
 
     async def send_input(self, text):
-        """Send user input to SSH."""
+        """Send user input to SSH, context-aware."""
         if self.process and self.alive:
-            self.process.stdin.write(text + "\n")
+            ctx = self.detected_context
+            if ctx in self.RAW_INPUT_CONTEXTS:
+                # In editors/interactive apps: send text raw (typed into buffer)
+                self.process.stdin.write(text)
+            else:
+                # In shell: send as command with carriage return (Enter key)
+                self.process.stdin.write(text + "\r")
 
     async def send_raw(self, data):
         """Send raw data to SSH (no newline appended)."""
@@ -572,6 +1212,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     save_users(users)
 
+    # Force refresh membership status on /start
+    invalidate_membership_cache(user.id)
+    if not await require_membership(update, context):
+        return
+
     await update.message.reply_text(
         f"👋 <b>Welcome to EazySSH!</b>\n\n"
         f"Connect to your servers securely from Telegram.\n"
@@ -602,6 +1247,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     uid = query.from_user.id
+
+    # ─── Membership recheck button ───
+    if data == "check_membership":
+        invalidate_membership_cache(uid)
+        if await is_channel_member(context.bot, uid):
+            await query.edit_message_text(
+                f"✅ <b>عضویت تایید شد!</b>\n\n"
+                f"👋 Welcome to EazySSH!\n"
+                f"Choose your preferred terminal:",
+                parse_mode="HTML",
+                reply_markup=main_menu_keyboard(),
+            )
+        else:
+            await query.answer("❌ هنوز عضو کانال نیستید!", show_alert=True)
+        return
+
+    # ─── Check channel membership for all other actions ───
+    # Invalidate cache to ensure fresh check on every button press
+    invalidate_membership_cache(uid)
+    if not await require_membership(update, context):
+        return
 
     # ─── Menu navigation ───
     if data == "menu:main":
@@ -732,28 +1398,102 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "term:clear":
         if uid in active_sessions:
-            active_sessions[uid].output_lines = []
-            await active_sessions[uid]._update_terminal_message()
+            session = active_sessions[uid]
+            session.output_lines = []
+            session.full_output_lines = []
+            session.log_sent_index = 0
+            session.screen = VT100Screen(80, 24)
+            await session._update_terminal_message()
         return
 
-    if data == "term:enter":
+    # ─── Mode toggle ───
+    if data.startswith("term:mode:"):
+        new_mode = data.split(":", 2)[2]
         if uid in active_sessions:
-            await active_sessions[uid].send_raw("\n")
+            session = active_sessions[uid]
+            old_mode = session.output_mode
+            session.output_mode = new_mode
+            if new_mode == "log":
+                # Start log from current position (don't re-send old output)
+                session.log_sent_index = len(session.full_output_lines)
+            elif new_mode == "stream" and old_mode == "log":
+                # Switching back to stream: refresh display immediately
+                pass
+            await session._update_terminal_message()
         return
 
-    if data == "term:ctrlc":
-        if uid in active_sessions:
-            await active_sessions[uid].send_raw("\x03")
-        return
+    # ─── Context-aware buttons ───
+    if data.startswith("ctx:"):
+        if uid not in active_sessions:
+            return
+        session = active_sessions[uid]
+        action = data[4:]  # strip "ctx:" prefix
+        raw = SSHSession.CTX_MAP.get(action)
+        if raw:
+            await session.send_raw(raw)
 
-    if data == "term:ctrlx":
-        if uid in active_sessions:
-            await active_sessions[uid].send_raw("\x18")
-        return
+            # ── State machine: immediate context transitions ──
+            ctx = session.detected_context
 
-    if data == "term:ctrlb":
-        if uid in active_sessions:
-            await active_sessions[uid].send_raw("\x02")
+            if ctx == "nano" and action == "ctrl_x":
+                # Ctrl+X in nano → "Save modified buffer?" prompt
+                session.detected_context = "nano_exit"
+                session._context_lock_until = time.time() + 2.0
+                await session._update_terminal_message()
+
+            elif ctx == "nano_exit" and action == "key_Y":
+                # Y in nano exit → "File Name to Write:" prompt
+                session.detected_context = "nano_filename"
+                session._context_lock_until = time.time() + 2.0
+                await session._update_terminal_message()
+
+            elif ctx == "nano_exit" and action == "key_N":
+                # N in nano exit → nano closes, back to shell
+                session.detected_context = "default"
+                session._context_lock_until = time.time() + 1.0
+                # Wait for shell prompt then update
+                async def _delayed_update():
+                    await asyncio.sleep(0.5)
+                    if session.alive:
+                        await session._flush_and_update()
+                asyncio.create_task(_delayed_update())
+
+            elif ctx == "nano_exit" and action == "ctrl_c":
+                # Cancel exit → back to nano editor
+                session.detected_context = "nano"
+                session._context_lock_until = time.time() + 2.0
+                await session._update_terminal_message()
+
+            elif ctx == "nano_filename" and action == "enter":
+                # Enter on filename → nano saves and exits
+                session.detected_context = "default"
+                session._context_lock_until = time.time() + 1.0
+                async def _delayed_update():
+                    await asyncio.sleep(0.5)
+                    if session.alive:
+                        await session._flush_and_update()
+                asyncio.create_task(_delayed_update())
+
+            elif ctx == "nano_filename" and action == "ctrl_c":
+                # Cancel filename → back to nano editor
+                session.detected_context = "nano"
+                session._context_lock_until = time.time() + 2.0
+                await session._update_terminal_message()
+
+            elif ctx == "nano" and action == "ctrl_o":
+                # Ctrl+O in nano → "File Name to Write:" prompt
+                session.detected_context = "nano_filename"
+                session._context_lock_until = time.time() + 2.0
+                await session._update_terminal_message()
+
+            else:
+                # Generic: schedule delayed update for other contexts
+                async def _delayed_update():
+                    await asyncio.sleep(0.5)
+                    if session.alive:
+                        await session._flush_and_update()
+                asyncio.create_task(_delayed_update())
+
         return
 
     # ─── Delete server ───
@@ -1067,6 +1807,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text or ""
 
+    # ─── Allow admin broadcast without membership check ───
+    if uid == ADMIN_ID and ADMIN_ID in broadcast_pending:
+        pass  # skip membership for admin broadcast
+    else:
+        # ─── Check channel membership ───
+        if not await require_membership(update, context):
+            return
+
     # ─── SFTP: File upload (document received) ───
     sess = sftp_sessions.get(uid)
     if sess and sess.get("awaiting_upload") and update.message.document:
@@ -1134,6 +1882,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.delete()
             except Exception:
                 pass
+            # Schedule update for context-aware button refresh
+            async def _delayed_update():
+                await asyncio.sleep(0.8)
+                if session.alive:
+                    await session._flush_and_update()
+            asyncio.create_task(_delayed_update())
             return
 
     # ─── Broadcast handler (admin only) ───
@@ -1438,6 +2192,53 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("editing_server", None)
 
 
+# ─── Membership Enforcement Background Task ───
+
+async def membership_enforcement_loop(bot):
+    """Periodically check active users. If they left the channel, kick them."""
+    while True:
+        try:
+            await asyncio.sleep(20)  # check every 20 seconds
+
+            # Check all users with active SSH sessions
+            active_uids = list(active_sessions.keys())
+            for uid in active_uids:
+                if uid == ADMIN_ID:
+                    continue
+                invalidate_membership_cache(uid)
+                if not await is_channel_member(bot, uid):
+                    # User left → kill session
+                    try:
+                        session = active_sessions.pop(uid, None)
+                        if session:
+                            await session.disconnect()
+                        await bot.send_message(
+                            chat_id=uid,
+                            text=(
+                                f"🔒 <b>دسترسی قطع شد</b>\n\n"
+                                f"شما از کانال {REQUIRED_CHANNEL} خارج شده‌اید.\n"
+                                f"برای استفاده مجدد از ربات، دوباره عضو شوید و /start بزنید."
+                            ),
+                            parse_mode="HTML",
+                            reply_markup=join_channel_keyboard(),
+                        )
+                    except Exception:
+                        pass
+
+            # Check SFTP sessions
+            sftp_uids = list(sftp_sessions.keys())
+            for uid in sftp_uids:
+                if uid == ADMIN_ID:
+                    continue
+                if not await is_channel_member(bot, uid):
+                    try:
+                        await sftp_close(uid)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"Membership enforcement error: {e}")
+
+
 # ─── Main ───
 
 def main():
@@ -1454,6 +2255,10 @@ def main():
             print(f"Menu button updated to: {WEBAPP_URL}")
         except Exception as e:
             print(f"Failed to set menu button: {e}")
+
+        # Start background membership enforcement
+        asyncio.create_task(membership_enforcement_loop(application.bot))
+        print(f"Channel enforcement enabled for: {REQUIRED_CHANNEL}")
 
     app = Application.builder().token(TOKEN).post_init(post_init).build()
 
